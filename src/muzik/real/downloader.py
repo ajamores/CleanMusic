@@ -1,9 +1,10 @@
 """Real Downloader — pulls a Source's audio with yt-dlp in the chosen format.
 
 M4A (default) prefers a native AAC stream and copies it — no re-encode. MP3 320
-(fallback) re-encodes. Age-restricted Sources need cookies; without them the
-offending entry is skipped with a clear reason and the batch is not aborted
-(ADR-0002: age-restricted Sources route to the Review queue, not to failure).
+(fallback) re-encodes. A download that fails — an age wall without cookies, a
+private/deleted video, a network error — is recorded on ``skipped`` with a reason
+and the batch is not aborted (ADR-0002 / #6: a failed Source routes to the Review
+queue, not to failure).
 """
 
 from __future__ import annotations
@@ -99,12 +100,17 @@ class YtDlpDownloader:
             with yt_dlp.YoutubeDL(self._build_opts()) as ydl:
                 info = ydl.extract_info(source.url, download=True)
         except DownloadError as error:
+            # Any download failure — age wall, private/deleted video, network —
+            # routes the Source to the Review queue and lets the batch go on
+            # (ADR-0002 / #6), rather than aborting it. Age restriction keeps its
+            # actionable message; everything else carries yt-dlp's own error.
             if _is_age_restriction(error) and self._cookies is None:
                 reason = "age-restricted Source needs --cookies to download"
-                logger.warning("Skipping %s: %s", source.url, reason)
-                self.skipped.append((source.url, reason))
-                return []
-            raise
+            else:
+                reason = f"download failed: {error}"
+            logger.warning("Skipping %s: %s", source.url, reason)
+            self.skipped.append((source.url, reason))
+            return []
 
         suffix = self._output_format.file_suffix
         entries = info.get("entries") if "entries" in info else [info]
