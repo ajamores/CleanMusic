@@ -19,6 +19,7 @@ class _LocalFileDownloader:
 
     def __init__(self, audio_path):
         self._audio_path = audio_path
+        self.skipped: list[tuple[str, str]] = []
 
     def download(self, source: Source) -> list[Track]:
         return [Track(source_url=source.url, audio_path=self._audio_path)]
