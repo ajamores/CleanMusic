@@ -60,7 +60,23 @@ class TrackResult:
     source_url: str
     tags: Tags | None
     output_path: Path | None
-    #: "tagged" on the happy path, or "review" when the Track went to the Review queue.
+    #: "tagged" when a file was written, "review" when nothing was (no Match / skip).
     status: Literal["tagged", "review"]
-    #: Why a Track landed in the Review queue; None when tagged.
+    #: Why a Track is in the Review queue; None only for a verified, confirmed Track.
+    #: A provisionally-written Track ("tagged" but unverified) still carries a reason.
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    """One entry in the persisted Review queue: a Track the user must clear.
+
+    Carries whatever the batch could establish — provisional ``tags`` (None when
+    the Track was never identified or never downloaded), where the file landed if
+    one was written, and the ``reason`` it needs review.
+    """
+
+    source_url: str
+    reason: str
+    tags: Tags | None = None
+    output_path: Path | None = None

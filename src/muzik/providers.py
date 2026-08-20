@@ -11,11 +11,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from muzik.domain import Match, Source, Tags, Track
+from muzik.domain import Match, ReviewItem, Source, Tags, Track
 
 
 class Downloader(Protocol):
     """Turns a Source into one or more downloaded Tracks (a playlist yields many)."""
+
+    #: ``(title_or_url, reason)`` for every entry skipped this batch (e.g. an
+    #: age-restricted Source without cookies). A skip routes to the Review queue
+    #: rather than aborting the batch (ADR-0002); the engine drains this after
+    #: download.
+    skipped: list[tuple[str, str]]
 
     def download(self, source: Source) -> list[Track]: ...
 
@@ -53,3 +59,13 @@ class TagWriter(Protocol):
     """Writes Tags (and embedded cover art) into a Track's file; returns its path."""
 
     def write(self, track: Track, tags: Tags) -> Path: ...
+
+
+class ReviewQueue(Protocol):
+    """The persisted set of Tracks too uncertain to auto-tag (CONTEXT.md).
+
+    The engine appends to it during a batch; the batch never blocks on it. #7
+    adds the read/clear side the user works through afterwards.
+    """
+
+    def enqueue(self, item: ReviewItem) -> None: ...

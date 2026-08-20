@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from muzik.domain import Match, Source, Tags, Track
+from muzik.domain import Match, ReviewItem, Source, Tags, Track
 from muzik.settings import OutputFormat
 
 
@@ -119,3 +119,13 @@ class FakeTagWriter:
     def write(self, track: Track, tags: Tags) -> Path:
         self.written.append((track, tags))
         return track.audio_path.with_suffix(self._output_format.file_suffix)
+
+
+class FakeReviewQueue:
+    """Collects enqueued items in memory so a whole-box test can assert them."""
+
+    def __init__(self) -> None:
+        self.items: list[ReviewItem] = []
+
+    def enqueue(self, item: ReviewItem) -> None:
+        self.items.append(item)

@@ -8,11 +8,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from muzik.domain import Source
-from muzik.engine import Providers, run
+from muzik.engine import Providers, run, summarize
 from muzik.real.authority import ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
 from muzik.real.resolver import HaikuResolver
+from muzik.real.review_queue import JsonReviewQueue
 from muzik.real.tagwriter import Mp3TagWriter, Mp4TagWriter
 from muzik.settings import OutputFormat, Settings, load_settings, save_settings
 
@@ -24,7 +25,9 @@ def _build_downloader(out_dir: Path, cookies: Path | None, fmt: OutputFormat) ->
     return YtDlpDownloader(out_dir=out_dir, cookies=cookies, output_format=fmt)
 
 
-def _build_providers(downloader: YtDlpDownloader, fmt: OutputFormat) -> Providers:
+def _build_providers(
+    downloader: YtDlpDownloader, fmt: OutputFormat, out_dir: Path
+) -> Providers:
     tagwriter = Mp4TagWriter() if fmt is OutputFormat.M4A else Mp3TagWriter()
     return Providers(
         downloader=downloader,
@@ -32,6 +35,7 @@ def _build_providers(downloader: YtDlpDownloader, fmt: OutputFormat) -> Provider
         authority=ShazamOwnAuthority(),
         resolver=HaikuResolver(),
         tagwriter=tagwriter,
+        review_queue=JsonReviewQueue(out_dir / "review-queue.json"),
     )
 
 
@@ -60,19 +64,28 @@ def main() -> int:
 
     fmt = _resolve_format(args.format)
     downloader = _build_downloader(args.out, args.cookies, fmt)
-    results = run(Source(url=args.url), _build_providers(downloader, fmt))
+    results = run(Source(url=args.url), _build_providers(downloader, fmt, args.out))
 
     for result in results:
-        if result.status == "tagged" and result.tags is not None:
+        # A verified Track (no reason) is tagged as truth; anything with a reason
+        # went to the Review queue, provisional Tags and all.
+        if result.reason is None and result.tags is not None:
             print(f"tagged  {result.tags.artist} — {result.tags.title} [{result.tags.album}]")
             print(f"        {result.output_path}")
         else:
             print(f"review  {result.source_url} ({result.reason})")
+            # A gate failure still writes provisional Tags to a real file; tell the
+            # user where it landed so they can find it during review.
+            if result.output_path is not None:
+                print(f"        {result.output_path} (provisional)")
 
     # Sources the Downloader skipped (e.g. age-restricted without --cookies) did not
-    # reach the engine, but still owe the user a clear reason. The batch went on.
+    # reach the engine, but were enqueued by run(); print their reason too.
     for source_url, reason in downloader.skipped:
         print(f"review  {source_url} ({reason})")
+
+    summary = summarize(results, len(downloader.skipped))
+    print(f"\n{summary.verified} verified, {summary.queued} queued for review")
     return 0
 
 

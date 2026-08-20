@@ -12,39 +12,81 @@ touching the others: #3/#4 grow ``_album_waterfall``, #5 fills ``_confidence_gat
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from muzik.domain import Match, Source, Tags, Track, TrackResult
+from muzik.domain import Match, ReviewItem, Source, Tags, Track, TrackResult
 from muzik.providers import (
     Authority,
     Downloader,
     Fingerprinter,
     Resolver,
+    ReviewQueue,
     TagWriter,
 )
 
 
+class _NullReviewQueue:
+    """Discards enqueued items. The default when a caller opts out of a queue.
+
+    Real runs wire a persisted queue (``cli.py``); tests that assert queue
+    contents inject a fake. This default keeps callers that don't care about the
+    queue from having to construct one.
+    """
+
+    def enqueue(self, item: ReviewItem) -> None:  # noqa: D102
+        pass
+
+
 @dataclass(frozen=True)
 class Providers:
-    """The five injected providers the engine runs against."""
+    """The injected providers the engine runs against."""
 
     downloader: Downloader
     fingerprinter: Fingerprinter
     authority: Authority
     resolver: Resolver
     tagwriter: TagWriter
+    review_queue: ReviewQueue = field(default_factory=_NullReviewQueue)
+
+
+@dataclass(frozen=True)
+class BatchSummary:
+    """The tally a batch prints when it finishes: verified vs. queued Tracks."""
+
+    verified: int
+    queued: int
+
+
+def summarize(results: list[TrackResult], skipped_count: int = 0) -> BatchSummary:
+    """Count verified Tracks vs. those routed to the Review queue.
+
+    A result carries a ``reason`` exactly when it is queued (unidentified, or
+    tagged-but-unverified); ``skipped_count`` adds the downloads that never
+    became a Track (e.g. age-restricted without cookies).
+    """
+    queued = sum(1 for r in results if r.reason is not None) + skipped_count
+    verified = sum(1 for r in results if r.reason is None)
+    return BatchSummary(verified=verified, queued=queued)
 
 
 def run(source: Source, providers: Providers) -> list[TrackResult]:
-    """Process a Source end to end, returning one result per Track.
+    """Process a Source end to end, returning one result per downloaded Track.
 
-    The per-Track pipeline lives in ``_process_track``; this loop is the seam
-    #8 replaces with bounded concurrency.
+    Every reviewable Track — a gate failure, an unidentified Track, or a
+    Downloader skip — is appended to the Review queue with a reason, and the
+    batch runs to completion regardless (CONTEXT.md: the batch never blocks).
+    The per-Track pipeline lives in ``_process_track``; this loop is the seam #8
+    replaces with bounded concurrency.
     """
     results: list[TrackResult] = []
     for track in providers.downloader.download(source):
-        results.append(_process_track(track, providers))
+        result = _process_track(track, providers)
+        if result.reason is not None:
+            providers.review_queue.enqueue(_review_item(result))
+        results.append(result)
+    for source_url, reason in providers.downloader.skipped:
+        providers.review_queue.enqueue(ReviewItem(source_url=source_url, reason=reason))
     return results
 
 
@@ -54,13 +96,25 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     if match is None:
         return _review(track, "no fingerprint match")
     tags = _album_waterfall(match, providers)
-    tags = _confidence_gate(track, match, tags)
+    tags, reason = _confidence_gate(track, match, tags)
     output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
         tags=tags,
         output_path=output_path,
         status="tagged",
+        reason=reason,
+    )
+
+
+def _review_item(result: TrackResult) -> ReviewItem:
+    """The Review-queue entry for a reviewable result (``reason`` is set)."""
+    assert result.reason is not None
+    return ReviewItem(
+        source_url=result.source_url,
+        reason=result.reason,
+        tags=result.tags,
+        output_path=result.output_path,
     )
 
 
@@ -207,24 +261,25 @@ def _provisional_from_source(source_title: str, fallback_artist: str) -> Tags | 
     return Tags(title=title, artist=artist, album="", verified=False)
 
 
-def _confidence_gate(track: Track, match: Match, tags: Tags) -> Tags:
+def _confidence_gate(track: Track, match: Match, tags: Tags) -> tuple[Tags, str | None]:
     """Confirm the Match against the Source title, or fall back to provisional.
 
-    The Match is verified only when the Source corroborates it on **both** its
-    title and its artist (ADR-0002 / #11) — title agreement alone accepted a
-    confident-wrong Match whenever the title was a common word.
+    Returns the Tags to write and a Review-queue reason — ``None`` only when the
+    Match is verified. The Match is verified only when the Source corroborates it
+    on **both** its title and its artist (ADR-0002 / #11); title agreement alone
+    accepted a confident-wrong Match whenever the title was a common word.
     """
     uploader_artist = _normalise_uploader(track.uploader)
     witness = _identity_tokens(_source_artist(track.source_title)) | _identity_tokens(
         uploader_artist
     )
     if _agrees(match, track.source_title) and _artist_corroborates(match, witness):
-        return replace(tags, verified=True)
+        return replace(tags, verified=True), None
     provisional = _provisional_from_source(track.source_title, uploader_artist)
     if provisional is not None:
-        return provisional
+        return provisional, "unverified: provisional Tags from the Source, Match not corroborated"
     # No signal either way: keep the Match, but never stamp it verified.
-    return replace(tags, verified=False)
+    return replace(tags, verified=False), "unverified: no second witness to confirm the Match"
 
 
 def _write(track: Track, tags: Tags, providers: Providers) -> Path:
