@@ -35,6 +35,10 @@ class Authority(Protocol):
 
     def tags_for(self, match: Match) -> Tags: ...
 
+    def canonical_album(self, isrc: str | None) -> str | None:
+        """The recording's canonical studio album by ISRC, or None on a miss."""
+        ...
+
 
 class Resolver(Protocol):
     """The AI step that reasons over a Track's evidence to propose an identity.

@@ -11,7 +11,8 @@ touching the others: #3/#4 grow ``_album_waterfall``, #5 fills ``_confidence_gat
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from muzik.domain import Match, Source, Tags, Track, TrackResult
@@ -63,13 +64,36 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     )
 
 
-def _album_waterfall(match: Match, providers: Providers) -> Tags:
-    """Canonical Tags for a Match (ADR-0002).
+#: Tokens that mark a fingerprint album as non-canonical (a single / EP / remix)
+#: rather than a studio album. Matched against whole words, so "Deep" or "Sleep"
+#: don't trip the "ep" marker.
+_NON_CANONICAL_MARKERS = frozenset({"single", "ep", "remix", "remixes"})
 
-    Skeleton: pass the Fingerprinter's own Match through the Authority. #3 adds
-    the MusicBrainz-by-ISRC tier, #4 the Resolver tier.
+
+def _looks_canonical(album: str) -> bool:
+    """A studio album, worth keeping as-is? Empty or single/EP/remix albums aren't."""
+    if not album or not album.strip():
+        return False
+    words = set(re.findall(r"[a-z]+", album.lower()))
+    return words.isdisjoint(_NON_CANONICAL_MARKERS)
+
+
+def _album_waterfall(match: Match, providers: Providers) -> Tags:
+    """First tier of the album waterfall (ADR-0002, ticket #3).
+
+    Keep the fingerprint's album when it already looks canonical. When it looks
+    non-canonical (single / EP / remix) or is missing, ask the Authority for the
+    recording's canonical studio album by ISRC and substitute it. A miss (no ISRC,
+    or MusicBrainz returns nothing) leaves the album unchanged. #4 adds the
+    Resolver tier below this.
     """
-    return providers.authority.tags_for(match)
+    tags = providers.authority.tags_for(match)
+    if _looks_canonical(match.album) or not match.isrc:
+        return tags
+    studio_album = providers.authority.canonical_album(match.isrc)
+    if not studio_album:
+        return tags
+    return replace(tags, album=studio_album)
 
 
 def _confidence_gate(track: Track, match: Match, tags: Tags) -> Tags:

@@ -32,7 +32,18 @@ class FakeFingerprinter:
 
 
 class FakeAuthority:
-    """Pass-through: Tags come straight from the Match's own identity and art."""
+    """Pass-through Tags, plus a canned MusicBrainz-by-ISRC album lookup.
+
+    ``tags_for`` mirrors the skeleton (Tags from the Match's own identity).
+    ``canonical_album`` stands in for the real Authority's ISRC lookup: it returns
+    the preset ``studio_album`` (``None`` simulates a MusicBrainz miss) and records
+    each ISRC it was asked about, so a whole-box test can assert whether — and with
+    what — the Authority was consulted.
+    """
+
+    def __init__(self, studio_album: str | None = None) -> None:
+        self._studio_album = studio_album
+        self.canonical_album_calls: list[str | None] = []
 
     def tags_for(self, match: Match) -> Tags:
         return Tags(
@@ -41,6 +52,10 @@ class FakeAuthority:
             album=match.album,
             cover_art=match.cover_art,
         )
+
+    def canonical_album(self, isrc: str | None) -> str | None:
+        self.canonical_album_calls.append(isrc)
+        return self._studio_album
 
 
 class FakeResolver:
