@@ -29,3 +29,17 @@ def silent_m4a(tmp_path):
         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return path
+
+
+@pytest.fixture
+def silent_mp3(tmp_path):
+    """A throwaway 1-second silent MP3, minted with ffmpeg."""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    path = tmp_path / "track.mp3"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+         "-t", "1", "-c:a", "libmp3lame", "-b:a", "320k", str(path)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return path
