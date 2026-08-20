@@ -6,8 +6,30 @@ covering "M4A avoids re-encoding native audio; MP3 320 is the fallback".
 
 from pathlib import Path
 
+from yt_dlp.utils import DownloadError
+
+from muzik.domain import Source
 from muzik.real.downloader import YtDlpDownloader, _track_from_entry
 from muzik.settings import OutputFormat
+
+
+class _RaisingYoutubeDL:
+    """Stands in for yt_dlp.YoutubeDL and fails the download with a given error."""
+
+    def __init__(self, message: str):
+        self._message = message
+
+    def __call__(self, opts: dict) -> "_RaisingYoutubeDL":
+        return self
+
+    def __enter__(self) -> "_RaisingYoutubeDL":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def extract_info(self, url: str, download: bool):
+        raise DownloadError(self._message)
 
 
 def _extract_audio_pp(opts: dict) -> dict:
@@ -61,3 +83,31 @@ def test_entry_falls_back_to_channel_then_empty():
     )
     assert from_channel.uploader == "SomeVEVO"
     assert neither.uploader == ""
+
+
+def test_a_generic_download_failure_is_skipped_not_raised(tmp_path, monkeypatch):
+    # A private/deleted/network failure must route the Source to the Review queue
+    # (recorded on `skipped`) and let the batch go on — not abort it (#6).
+    raiser = _RaisingYoutubeDL("ERROR: Private video. Sign in if you've been granted access")
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", raiser)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/private"))
+
+    assert tracks == []
+    assert len(downloader.skipped) == 1
+    url, reason = downloader.skipped[0]
+    assert url == "https://youtu.be/private"
+    assert reason  # a non-empty reason for the user
+
+
+def test_age_restriction_without_cookies_is_still_skipped(tmp_path, monkeypatch):
+    # The existing friendly age-restriction path must survive the broadened catch.
+    raiser = _RaisingYoutubeDL("ERROR: Sign in to confirm your age")
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", raiser)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, cookies=None)
+    tracks = downloader.download(Source(url="https://youtu.be/age"))
+
+    assert tracks == []
+    assert "cookies" in downloader.skipped[0][1].lower()
