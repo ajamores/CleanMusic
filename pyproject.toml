@@ -1,0 +1,29 @@
+[project]
+name = "muzik"
+version = "0.1.0"
+description = "Download audio from a YouTube Source and write verified music Tags into each Track."
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp>=2024.1.0",
+    "shazamio>=0.5",
+    "musicbrainzngs>=0.7.1",
+    "anthropic>=0.40",
+    "mutagen>=1.47",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+muzik = "muzik.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/muzik"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
