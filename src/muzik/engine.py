@@ -157,13 +157,45 @@ def _agrees(match: Match, source_title: str) -> bool:
     return title_tokens <= _identity_tokens(source_title)
 
 
-def _provisional_from_source(source_title: str) -> Tags | None:
+def _source_artist(source_title: str) -> str:
+    """The artist half of the Source's "Artist - Title", or "" if there is none."""
+    parsed = _ARTIST_TITLE_RE.match(_clean(source_title))
+    return parsed.group("artist").strip() if parsed else ""
+
+
+def _artist_corroborates(match: Match, witness_tokens: set[str]) -> bool:
+    """True when the Source's artist witness corroborates the Match's artist.
+
+    The second witness the gate needs (ADR-0002): a title can agree by accident
+    ("Love" is a common title), so a Match is confirmed only when the Source also
+    backs its *artist*. Every meaningful word of the Match's artist must appear in
+    the witness. An empty witness (no artist signal) cannot corroborate — that is
+    the "no usable signal" case, kept unverified rather than confirmed.
+    """
+    artist_tokens = _identity_tokens(match.artist)
+    if not artist_tokens or not witness_tokens:
+        return False
+    return artist_tokens <= witness_tokens
+
+
+#: YouTube's auto-generated artist channels ("Rick Astley - Topic") and label
+#: channels ("RickAstleyVEVO") dress the artist name; strip the dressing so the
+#: bare artist is left ("Rick Astley").
+_TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*topic\s*$", re.IGNORECASE)
+_VEVO_SUFFIX_RE = re.compile(r"vevo\s*$", re.IGNORECASE)
+
+
+def _normalise_uploader(uploader: str) -> str:
+    """A channel name reduced to the bare artist: drop "- Topic" / "VEVO"."""
+    return _VEVO_SUFFIX_RE.sub("", _TOPIC_SUFFIX_RE.sub("", uploader)).strip()
+
+
+def _provisional_from_source(source_title: str, fallback_artist: str) -> Tags | None:
     """Best-effort Tags parsed from the Source's own title.
 
-    Recognises "Artist - Title"; the uploader is the fallback artist, but the
-    current Track model carries no uploader field, so an absent artist resolves
-    to "" (pending review). Returns None when the Source offers no usable
-    "Artist - Title" identity to contradict the Match with.
+    Recognises "Artist - Title"; when the title carries no artist, ``fallback_artist``
+    (the normalised uploader, #11) is used instead. Returns None when the Source
+    offers no usable "Artist - Title" identity to contradict the Match with.
     """
     parsed = _ARTIST_TITLE_RE.match(_clean(source_title))
     if parsed is None:
@@ -171,14 +203,24 @@ def _provisional_from_source(source_title: str) -> Tags | None:
     title = parsed.group("title").strip()
     if not title:
         return None
-    return Tags(title=title, artist=parsed.group("artist").strip(), album="", verified=False)
+    artist = parsed.group("artist").strip() or fallback_artist
+    return Tags(title=title, artist=artist, album="", verified=False)
 
 
 def _confidence_gate(track: Track, match: Match, tags: Tags) -> Tags:
-    """Confirm the Match against the Source title, or fall back to provisional."""
-    if _agrees(match, track.source_title):
+    """Confirm the Match against the Source title, or fall back to provisional.
+
+    The Match is verified only when the Source corroborates it on **both** its
+    title and its artist (ADR-0002 / #11) — title agreement alone accepted a
+    confident-wrong Match whenever the title was a common word.
+    """
+    uploader_artist = _normalise_uploader(track.uploader)
+    witness = _identity_tokens(_source_artist(track.source_title)) | _identity_tokens(
+        uploader_artist
+    )
+    if _agrees(match, track.source_title) and _artist_corroborates(match, witness):
         return replace(tags, verified=True)
-    provisional = _provisional_from_source(track.source_title)
+    provisional = _provisional_from_source(track.source_title, uploader_artist)
     if provisional is not None:
         return provisional
     # No signal either way: keep the Match, but never stamp it verified.
