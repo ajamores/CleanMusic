@@ -1,3 +1,7 @@
+## Learnings
+
+Before starting work, read `docs/LEARNINGS.md` — a short log of paid-for mistakes, so they aren't repeated. When a failure cost real effort to diagnose, add a trigger-first entry there.
+
 ## Agent skills
 
 ### Issue tracker

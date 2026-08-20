@@ -5,6 +5,13 @@
 # Python
 __pycache__/
 *.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Runtime output
+/downloads/
 
 # Prototype — throwaway code lives on branch prototype/identify-spike, not main
 /prototype/
