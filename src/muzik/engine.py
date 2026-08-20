@@ -96,13 +96,93 @@ def _album_waterfall(match: Match, providers: Providers) -> Tags:
     return replace(tags, album=studio_album)
 
 
-def _confidence_gate(track: Track, match: Match, tags: Tags) -> Tags:
-    """Cross-check the Match against the Source title before writing (ADR-0002).
+# --- Confidence gate (ADR-0002, ticket #5) -------------------------------------
+#
+# The gate guards against a confident-wrong Match by cross-checking it against
+# the Source's own title. It runs only on the matched path (a Track with no
+# Match is routed to the Review queue upstream). Three outcomes:
+#
+#   * Agreement  — the Source title echoes the Match  -> verified Tags, no marker.
+#   * Disagreement — the Source title names a different "Artist - Title"
+#                    -> best-effort provisional Tags parsed from the Source,
+#                       marked unverified (`verified=False`). The Match is never
+#                       written as truth.
+#   * No signal  — the Source title carries no usable identity (empty, or no
+#                  "Artist - Title" to contradict with) -> the Match cannot be
+#                  confirmed *or* contradicted, so it is kept but left
+#                  unverified, pending review.
+#
+# The "unverified" marker reuses the existing `Tags.verified` bool: True means
+# confirmed, False means provisional/unreviewed. No new field is needed.
 
-    Skeleton: pass-through. #5 marks Tags verified on agreement, or replaces
-    them with provisional Tags on a mismatch.
+#: Boilerplate words a YouTube title carries that say nothing about identity.
+_NOISE_TOKENS = frozenset(
+    {
+        "official", "video", "audio", "lyric", "lyrics", "music", "mv",
+        "hd", "hq", "4k", "visualizer", "visualiser", "remastered", "explicit",
+        "clip", "full", "version",
+    }
+)
+
+#: Bracketed asides — "(Official Video)", "[Audio]" — stripped before parsing.
+_BRACKETS_RE = re.compile(r"[\(\[\{].*?[\)\]\}]")
+
+#: "Artist - Title", split on the first whitespace-fenced hyphen or dash. The
+#: artist may be empty (a title with no artist before the dash); the uploader
+#: is its fallback. Internal hyphens ("Spider-Man - Theme") survive: the split
+#: needs whitespace *after* the dash, which a word-internal hyphen lacks.
+_ARTIST_TITLE_RE = re.compile(r"^(?P<artist>.*?)\s*[-‐-―−]\s+(?P<title>.+)$")
+
+
+def _clean(text: str) -> str:
+    """Strip bracketed asides and collapse whitespace."""
+    return re.sub(r"\s+", " ", _BRACKETS_RE.sub(" ", text)).strip()
+
+
+def _identity_tokens(text: str) -> set[str]:
+    """Lower-cased, noise-free word set — the identity a title carries."""
+    words = re.findall(r"[0-9a-z]+", _clean(text).lower())
+    return {w for w in words if w not in _NOISE_TOKENS}
+
+
+def _agrees(match: Match, source_title: str) -> bool:
+    """True when the Source title echoes the Match's own title.
+
+    Order-independent: every meaningful word of the Match title must appear
+    among the Source title's words ("Envy" agrees with "Ogi - Envy").
     """
-    return tags
+    title_tokens = _identity_tokens(match.title)
+    if not title_tokens:
+        return False
+    return title_tokens <= _identity_tokens(source_title)
+
+
+def _provisional_from_source(source_title: str) -> Tags | None:
+    """Best-effort Tags parsed from the Source's own title.
+
+    Recognises "Artist - Title"; the uploader is the fallback artist, but the
+    current Track model carries no uploader field, so an absent artist resolves
+    to "" (pending review). Returns None when the Source offers no usable
+    "Artist - Title" identity to contradict the Match with.
+    """
+    parsed = _ARTIST_TITLE_RE.match(_clean(source_title))
+    if parsed is None:
+        return None  # No "Artist - Title" structure: nothing to contradict with.
+    title = parsed.group("title").strip()
+    if not title:
+        return None
+    return Tags(title=title, artist=parsed.group("artist").strip(), album="", verified=False)
+
+
+def _confidence_gate(track: Track, match: Match, tags: Tags) -> Tags:
+    """Confirm the Match against the Source title, or fall back to provisional."""
+    if _agrees(match, track.source_title):
+        return replace(tags, verified=True)
+    provisional = _provisional_from_source(track.source_title)
+    if provisional is not None:
+        return provisional
+    # No signal either way: keep the Match, but never stamp it verified.
+    return replace(tags, verified=False)
 
 
 def _write(track: Track, tags: Tags, providers: Providers) -> Path:
