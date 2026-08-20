@@ -36,6 +36,22 @@ def _is_age_restriction(error: Exception) -> bool:
     return any(marker in message for marker in _AGE_MARKERS)
 
 
+def _track_from_entry(
+    entry: dict, out_dir: Path, suffix: str, url_fallback: str
+) -> Track:
+    """Map one yt-dlp info entry to a Track.
+
+    The uploader is the artist witness the Confidence gate leans on (#11); yt-dlp
+    exposes it as ``uploader`` (the channel), falling back to ``channel``, then "".
+    """
+    return Track(
+        source_url=entry.get("webpage_url", url_fallback),
+        audio_path=out_dir / f"{entry['id']}{suffix}",
+        source_title=entry.get("title", ""),
+        uploader=entry.get("uploader") or entry.get("channel") or "",
+    )
+
+
 class YtDlpDownloader:
     """Downloads bestaudio and extracts it to the chosen format, one Track per video."""
 
@@ -92,15 +108,8 @@ class YtDlpDownloader:
 
         suffix = self._output_format.file_suffix
         entries = info.get("entries") if "entries" in info else [info]
-        tracks: list[Track] = []
-        for entry in entries:
-            if not entry:
-                continue
-            tracks.append(
-                Track(
-                    source_url=entry.get("webpage_url", source.url),
-                    audio_path=self._out_dir / f"{entry['id']}{suffix}",
-                    source_title=entry.get("title", ""),
-                )
-            )
-        return tracks
+        return [
+            _track_from_entry(entry, self._out_dir, suffix, source.url)
+            for entry in entries
+            if entry
+        ]

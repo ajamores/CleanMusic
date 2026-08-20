@@ -22,6 +22,9 @@ class Track:
     audio_path: Path
     #: The Source's own title (channel/video title), used later by the Confidence gate.
     source_title: str = ""
+    #: The Source's uploader/channel — the gate's artist witness and the
+    #: provisional fallback artist when the title carries no "Artist -" (#11).
+    uploader: str = ""
 
 
 @dataclass(frozen=True)

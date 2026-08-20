@@ -25,12 +25,14 @@ class FakeDownloader:
         self,
         audio_path: Path = Path("/fake/audio.m4a"),
         title: str = "Fake Video",
+        uploader: str = "",
         output_format: OutputFormat = OutputFormat.M4A,
         cookies: Path | None = None,
         entries: Sequence[tuple[str, bool]] | None = None,
     ):
         self._audio_path = audio_path
         self._title = title
+        self._uploader = uploader
         self._output_format = output_format
         self._cookies = cookies
         #: Each entry is ``(title, age_restricted)``.
@@ -52,6 +54,7 @@ class FakeDownloader:
                     source_url=source.url,
                     audio_path=base.with_suffix(self._output_format.file_suffix),
                     source_title=title,
+                    uploader=self._uploader,
                 )
             )
         return tracks
