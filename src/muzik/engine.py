@@ -15,12 +15,22 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from muzik.domain import Match, ReviewItem, Source, Tags, Track, TrackResult
+from muzik.domain import (
+    Match,
+    ReviewAction,
+    ReviewDecision,
+    ReviewItem,
+    Source,
+    Tags,
+    Track,
+    TrackResult,
+)
 from muzik.providers import (
     Authority,
     Downloader,
     Fingerprinter,
     Resolver,
+    ReviewPrompter,
     ReviewQueue,
     TagWriter,
 )
@@ -83,7 +93,7 @@ def run(source: Source, providers: Providers) -> list[TrackResult]:
     for track in providers.downloader.download(source):
         result = _process_track(track, providers)
         if result.reason is not None:
-            providers.review_queue.enqueue(_review_item(result))
+            providers.review_queue.enqueue(_review_item(result, track))
         results.append(result)
     for source_url, reason in providers.downloader.skipped:
         providers.review_queue.enqueue(ReviewItem(source_url=source_url, reason=reason))
@@ -107,15 +117,159 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     )
 
 
-def _review_item(result: TrackResult) -> ReviewItem:
-    """The Review-queue entry for a reviewable result (``reason`` is set)."""
+def _review_item(result: TrackResult, track: Track) -> ReviewItem:
+    """The Review-queue entry for a reviewable result (``reason`` is set).
+
+    Carries ``track.audio_path`` so the clear pass (#7) can find the file on disk
+    even when nothing was written (a fingerprint miss has no ``output_path``).
+    """
     assert result.reason is not None
     return ReviewItem(
         source_url=result.source_url,
         reason=result.reason,
         tags=result.tags,
         output_path=result.output_path,
+        audio_path=track.audio_path,
     )
+
+
+# --- Clearing the Review queue (ticket #7) -------------------------------------
+#
+# After a batch, the user works through the queue one entry at a time. This side
+# is interface-agnostic too (ADR-0001): it drives a ReviewPrompter seam rather
+# than reading input, so the CLI and a future web adapter share it. Each entry is
+# accepted (verify its provisional Tags), tagged manually (user-supplied Tags),
+# re-identified from a hint, or skipped; a cleared entry is dropped from the queue.
+
+
+@dataclass(frozen=True)
+class ReviewOutcome:
+    """What became of one Review-queue entry during a clear pass.
+
+    ``cleared`` is True when the entry was tagged and dropped from the queue;
+    ``result`` is the write that tagged it (None for a skip or a failed hint).
+    """
+
+    item: ReviewItem
+    action: ReviewAction
+    cleared: bool
+    result: TrackResult | None
+
+
+def clear_review_queue(
+    providers: Providers, prompter: ReviewPrompter
+) -> list[ReviewOutcome]:
+    """Work through the Review queue, applying the user's choice to each entry.
+
+    Reads every entry, asks ``prompter`` what to do, applies it, and rewrites the
+    queue with the survivors — the entries left un-cleared (skipped, or a hint
+    that failed to re-identify). The queue is rewritten once, at the end.
+    """
+    outcomes: list[ReviewOutcome] = []
+    survivors: list[ReviewItem] = []
+    for item in providers.review_queue.items():
+        decision = prompter.decide(item)
+        result = _apply_review_decision(item, decision, providers)
+        cleared = result is not None and result.reason is None
+        outcomes.append(
+            ReviewOutcome(item=item, action=decision.action, cleared=cleared, result=result)
+        )
+        if not cleared:
+            survivors.append(item)
+    providers.review_queue.replace_all(survivors)
+    return outcomes
+
+
+def _apply_review_decision(
+    item: ReviewItem, decision: ReviewDecision, providers: Providers
+) -> TrackResult | None:
+    """Carry out one decision, returning the write it produced (None if none)."""
+    if decision.action == "skip":
+        return None
+    if decision.action == "accept":
+        if item.tags is None:
+            raise ValueError("cannot accept an entry that has no provisional Tags")
+        return _tag_from_review(item, replace(item.tags, verified=True), providers)
+    if decision.action == "manual":
+        if decision.tags is None:
+            raise ValueError("a manual decision must carry the Tags to write")
+        return _tag_from_review(item, replace(decision.tags, verified=True), providers)
+    if decision.action == "hint":
+        if not decision.hint:
+            raise ValueError("a hint decision must carry the corrected title")
+        return _reidentify(item, decision.hint, providers)
+    raise ValueError(f"unknown review action: {decision.action!r}")
+
+
+def _tag_from_review(item: ReviewItem, tags: Tags, providers: Providers) -> TrackResult:
+    """Write ``tags`` (verified) into the queued Track's file and return the result."""
+    track = _track_from_item(item)
+    output_path = _write(track, tags, providers)
+    return TrackResult(
+        source_url=item.source_url,
+        tags=tags,
+        output_path=output_path,
+        status="tagged",
+        reason=None,
+    )
+
+
+def _reidentify(item: ReviewItem, hint: str, providers: Providers) -> TrackResult:
+    """Re-identify a queued Track from the user's hint, then tag and dequeue it.
+
+    A hint is the user asserting the correct "Artist - Title" — the authority a
+    review exists to supply. Identification is re-run over it: the audio is
+    re-fingerprinted, and when the fingerprint now agrees with the hint its Match
+    is kept (so its cover art and ISRC come along). Otherwise — a fingerprint miss
+    (the commonest review reason, and the case a hint most needs to rescue), or a
+    fingerprint that contradicts the user — the hint itself seeds the identity.
+    Either way the album waterfall fills the album and the Tags are written
+    verified. Only a hint with no usable title fails, leaving the entry queued.
+    """
+    track = replace(_track_from_item(item), source_title=hint)
+    seed = _match_from_hint(hint)
+    if seed is None:
+        return _review(track, "a hint needs a title to re-identify")
+    match = providers.fingerprinter.identify(track)
+    if match is None or not _hint_corroborates(match, hint):
+        match = seed
+    tags = replace(_album_waterfall(track, match, providers), verified=True)
+    output_path = _write(track, tags, providers)
+    return TrackResult(
+        source_url=track.source_url,
+        tags=tags,
+        output_path=output_path,
+        status="tagged",
+        reason=None,
+    )
+
+
+def _match_from_hint(hint: str) -> Match | None:
+    """A user-asserted identity from a hint: "Artist - Title", or a bare title."""
+    parsed = _ARTIST_TITLE_RE.match(_clean(hint))
+    if parsed is not None:
+        title, artist = parsed.group("title").strip(), parsed.group("artist").strip()
+    else:
+        title, artist = _clean(hint), ""
+    if not title:
+        return None
+    return Match(title=title, artist=artist, album="", confidence=1.0)
+
+
+def _hint_corroborates(match: Match, hint: str) -> bool:
+    """True when a re-fingerprinted Match agrees with the hint on title and artist."""
+    witness = _identity_tokens(_source_artist(hint))
+    return _agrees(match, hint) and _artist_corroborates(match, witness)
+
+
+def _track_from_item(item: ReviewItem) -> Track:
+    """Reconstruct the Track a queue entry refers to, for tagging/re-identifying."""
+    audio_path = item.audio_path or item.output_path
+    if audio_path is None:
+        raise ValueError(
+            f"{item.source_url} has no file on disk to tag or re-identify"
+        )
+    return Track(source_url=item.source_url, audio_path=audio_path)
 
 
 #: Tokens that mark a fingerprint album as non-canonical (a single / EP / remix)

@@ -136,10 +136,20 @@ class FakeTagWriter:
 
 
 class FakeReviewQueue:
-    """Collects enqueued items in memory so a whole-box test can assert them."""
+    """In-memory Review queue: enqueue during a batch, read/clear afterwards (#7).
 
-    def __init__(self) -> None:
-        self.items: list[ReviewItem] = []
+    Preload it with ``items`` to stand in for a queue a prior batch left behind,
+    so a whole-box test can drive the clear pass over it.
+    """
+
+    def __init__(self, items: Sequence[ReviewItem] | None = None) -> None:
+        self._items: list[ReviewItem] = list(items) if items is not None else []
 
     def enqueue(self, item: ReviewItem) -> None:
-        self.items.append(item)
+        self._items.append(item)
+
+    def items(self) -> list[ReviewItem]:
+        return list(self._items)
+
+    def replace_all(self, items: list[ReviewItem]) -> None:
+        self._items = list(items)

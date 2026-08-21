@@ -8,8 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from muzik.domain import Match, Source, Track
-from muzik.engine import Providers, run, summarize
+from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
+from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
 from muzik.providers import Resolver
 from muzik.real.authority import ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
@@ -79,10 +79,95 @@ def _resolve_format(chosen: str | None) -> OutputFormat:
     return load_settings().output_format
 
 
+def _describe(item: ReviewItem) -> str:
+    """A one-line identity for a queue entry: its provisional Tags, or its URL."""
+    if item.tags is not None:
+        return f"{item.tags.artist} — {item.tags.title}"
+    return item.source_url
+
+
+class _StdinReviewPrompter:
+    """Asks the user, over stdin, what to do with each Review-queue entry (#7).
+
+    Offers only the actions an entry supports: accept needs provisional Tags to
+    verify; manual and hint need a file on disk to write to or re-fingerprint.
+    An empty answer, or EOF, skips — leaving the entry in the queue.
+    """
+
+    def decide(self, item: ReviewItem) -> ReviewDecision:
+        can_accept = item.tags is not None
+        can_tag = item.audio_path is not None or item.output_path is not None
+        print(f"\n{_describe(item)}\n  ({item.reason})")
+        options = "  ".join(
+            filter(
+                None,
+                [
+                    "(a)ccept" if can_accept else "",
+                    "(m)anual" if can_tag else "",
+                    "(h)int" if can_tag else "",
+                    "(s)kip",
+                ],
+            )
+        )
+        try:
+            choice = input(f"  {options}? ").strip().lower()
+        except EOFError:
+            return ReviewDecision(action="skip")
+        if choice in ("a", "accept") and can_accept:
+            return ReviewDecision(action="accept")
+        if choice in ("m", "manual") and can_tag:
+            return ReviewDecision(action="manual", tags=self._read_tags())
+        if choice in ("h", "hint") and can_tag:
+            hint = input("    correct 'Artist - Title': ").strip()
+            if hint:
+                return ReviewDecision(action="hint", hint=hint)
+        return ReviewDecision(action="skip")
+
+    def _read_tags(self) -> Tags:
+        return Tags(
+            title=input("    title:  ").strip(),
+            artist=input("    artist: ").strip(),
+            album=input("    album:  ").strip(),
+        )
+
+
+def _print_outcome(outcome: ReviewOutcome) -> None:
+    if outcome.cleared and outcome.result is not None and outcome.result.tags is not None:
+        tags = outcome.result.tags
+        print(f"tagged  {tags.artist} — {tags.title}")
+    elif outcome.action == "hint":
+        print(f"still queued  {_describe(outcome.item)} (hint did not re-identify it)")
+    else:
+        print(f"kept    {_describe(outcome.item)}")
+
+
+def _run_review(providers: Providers) -> int:
+    """List the Review queue and work through it interactively (#7)."""
+    entries = providers.review_queue.items()
+    if not entries:
+        print("The Review queue is empty.")
+        return 0
+    print(f"Review queue ({len(entries)}):")
+    for item in entries:
+        print(f"  {_describe(item)}  ({item.reason})")
+    outcomes = clear_review_queue(providers, _StdinReviewPrompter())
+    print()
+    for outcome in outcomes:
+        _print_outcome(outcome)
+    cleared = sum(1 for o in outcomes if o.cleared)
+    print(f"\n{cleared} cleared, {len(outcomes) - cleared} still queued")
+    return 0
+
+
 def main() -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(prog="muzik", description="Download a YouTube video and tag it.")
-    parser.add_argument("url", help="A YouTube video URL")
+    parser.add_argument("url", nargs="?", help="A YouTube video URL")
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Work through the Review queue instead of downloading",
+    )
     parser.add_argument("--out", type=Path, default=Path("downloads"), help="Output directory")
     parser.add_argument("--cookies", type=Path, default=None, help="Cookies file for age-restricted Sources")
     parser.add_argument(
@@ -95,7 +180,14 @@ def main() -> int:
 
     fmt = _resolve_format(args.format)
     downloader = _build_downloader(args.out, args.cookies, fmt)
-    results = run(Source(url=args.url), _build_providers(downloader, fmt, args.out))
+    providers = _build_providers(downloader, fmt, args.out)
+
+    if args.review:
+        return _run_review(providers)
+    if args.url is None:
+        parser.error("a YouTube URL is required (or pass --review to clear the queue)")
+
+    results = run(Source(url=args.url), providers)
 
     for result in results:
         # A verified Track (no reason) is tagged as truth; anything with a reason

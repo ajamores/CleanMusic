@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+ReviewAction = Literal["accept", "manual", "hint", "skip"]
+
 
 @dataclass(frozen=True)
 class Source:
@@ -74,9 +76,30 @@ class ReviewItem:
     Carries whatever the batch could establish — provisional ``tags`` (None when
     the Track was never identified or never downloaded), where the file landed if
     one was written, and the ``reason`` it needs review.
+
+    ``audio_path`` is where the downloaded audio lives on disk — known whenever a
+    Track was downloaded, even for a fingerprint miss that wrote no Tags. The
+    clear pass (#7) needs it to write accepted/manual Tags and to re-fingerprint
+    on a hint; it is None only for an entry that never became a Track (a skipped
+    download).
     """
 
     source_url: str
     reason: str
     tags: Tags | None = None
     output_path: Path | None = None
+    audio_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class ReviewDecision:
+    """What the user chose to do with one Review-queue entry (#7).
+
+    ``accept`` verifies the entry's own provisional ``tags``; ``manual`` writes
+    the user-supplied ``tags``; ``hint`` re-runs Identification with ``hint`` as a
+    corrected "Artist - Title"; ``skip`` leaves the entry in the queue.
+    """
+
+    action: ReviewAction
+    tags: Tags | None = None
+    hint: str | None = None
