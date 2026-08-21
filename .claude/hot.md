@@ -12,7 +12,7 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Building phase; the real Fingerprinter/Downloader are still fakes-first, so tuning is against what yt-dlp metadata gives us.
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Real providers are built and wired in `cli.py`: yt-dlp download, **Shazam** fingerprint (`shazamio`), **MusicBrainz** album-by-ISRC, **Haiku** resolver, MP3/M4A tag writers, JSON review queue. Identity comes from the audio fingerprint; the fakes are test doubles for whole-box tests. Wave 2 is polish, not the core build.
 
 ## Current State (2026-08-20)
 
