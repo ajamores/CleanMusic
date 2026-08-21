@@ -1,10 +1,16 @@
-"""Real Review queue — a JSON file the batch appends to and #7 later clears.
+"""Real Review queue — a JSON Lines file the batch appends to and #7 later clears.
 
 The queue must survive a process exit (a batch fills it; the user works through it
-in a separate run), so each ``enqueue`` reads the file, appends, and writes the whole
-array back atomically (temp file + rename). Rewriting the whole file per item is
-O(n^2) across a batch — fine for the current single-video CLI, revisit if #8's
-playlists make review counts large (JSON Lines would append in O(1)).
+in a separate run). Playlists (#8) make review counts large, so ``enqueue`` appends
+a single line — O(1) — rather than rewriting the whole file (the old JSON-array
+form re-serialised every record per enqueue: O(n^2) across a batch).
+
+Append is not atomic across a crash, so a torn final line is possible; ``items``
+tolerates it (skips any unparseable record) so a half-written line never breaks the
+next batch's read, and ``enqueue`` first closes off an unterminated tail with a
+newline so a later append lands on its own clean line rather than fusing onto the
+torn one. Only ``replace_all`` — the clear pass, run once — rewrites the whole file,
+and it does so atomically (temp file + rename).
 
 Cover art is deliberately not stored: the provisionally-written file already holds
 it, and the queue only needs a Track's identity and the reason it needs review.
@@ -13,49 +19,84 @@ it, and the queue only needs a Track's identity and the reason it needs review.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
 
 from muzik.domain import ReviewItem, Tags
 
+logger = logging.getLogger(__name__)
+
 
 class JsonReviewQueue:
-    """Appends ReviewItems to a JSON array on disk; reloads them with ``items``."""
+    """Appends ReviewItems as JSON Lines; reloads them with ``items``."""
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
 
     def enqueue(self, item: ReviewItem) -> None:
-        records = self._load()
-        records.append(_to_record(item))
-        self._write_atomic(records)
+        """Append one record, O(1) — no read of the body, no whole-file rewrite."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(_to_record(item), ensure_ascii=False)
+        with self._path.open("a", encoding="utf-8") as handle:
+            if self._has_unterminated_tail():
+                # A prior crash left a torn, newline-less line. Close it off first
+                # so this record lands cleanly on its own line instead of fusing
+                # onto the torn one (which would corrupt this record too).
+                handle.write("\n")
+            handle.write(line + "\n")
+
+    def _has_unterminated_tail(self) -> bool:
+        """True when the file ends mid-line (no trailing newline) — an O(1) peek."""
+        try:
+            with self._path.open("rb") as handle:
+                if handle.seek(0, os.SEEK_END) == 0:
+                    return False
+                handle.seek(-1, os.SEEK_END)
+                return handle.read(1) != b"\n"
+        except FileNotFoundError:
+            return False
 
     def items(self) -> list[ReviewItem]:
         return [_from_record(record) for record in self._load()]
 
     def replace_all(self, items: list[ReviewItem]) -> None:
         """Overwrite the queue with ``items`` — the survivors of a clear pass (#7)."""
-        self._write_atomic([_to_record(item) for item in items])
+        self._write_atomic(items)
 
     def _load(self) -> list[dict]:
         if not self._path.exists():
             return []
-        records = json.loads(self._path.read_text(encoding="utf-8"))
-        if not isinstance(records, list):
-            raise ValueError(f"{self._path} is not a JSON array of Review items")
+        text = self._path.read_text(encoding="utf-8")
+        records: list[dict] = []
+        for index, line in enumerate(text.splitlines()):
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                # A crash mid-append leaves a torn, unparseable line. Skip it and
+                # keep the intact records rather than failing the whole read — a
+                # single half-written entry must never block the review batch.
+                logger.warning(
+                    "Skipping a corrupt Review-queue record on line %d of %s",
+                    index + 1,
+                    self._path,
+                )
         return records
 
-    def _write_atomic(self, records: list[dict]) -> None:
-        """Write the whole queue via a temp file + rename, so a crash mid-write
-        can never leave a truncated file that breaks the next batch."""
+    def _write_atomic(self, items: list[ReviewItem]) -> None:
+        """Rewrite the whole queue via a temp file + rename, so a crash mid-write
+        can never leave a truncated file that breaks the next batch's read."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(
             dir=self._path.parent, prefix=".review-queue-", suffix=".tmp"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps(records, indent=2))
+                for item in items:
+                    handle.write(json.dumps(_to_record(item), ensure_ascii=False) + "\n")
             os.replace(tmp, self._path)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)

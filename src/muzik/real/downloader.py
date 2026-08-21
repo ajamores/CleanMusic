@@ -89,6 +89,11 @@ class YtDlpDownloader:
             "postprocessors": [extract],
             "quiet": True,
             "noprogress": True,
+            # Re-running a Source must not re-download Tracks already fetched (#8).
+            # yt-dlp records each downloaded video's id here and skips any it has
+            # already seen on a later run; skipped entries come back falsy and are
+            # dropped in ``download``.
+            "download_archive": str(self._out_dir / ".download-archive.txt"),
         }
         if self._cookies is not None:
             opts["cookiefile"] = str(self._cookies)

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
 from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
 from muzik.providers import Resolver
-from muzik.real.authority import ShazamOwnAuthority
+from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
 from muzik.real.resolver import HaikuResolver
@@ -63,10 +63,12 @@ def _build_providers(
     return Providers(
         downloader=downloader,
         fingerprinter=ShazamFingerprinter(),
-        authority=ShazamOwnAuthority(),
+        # A playlist runs Tracks concurrently (#8), so the MusicBrainz tier is
+        # spaced to ~1 req/sec — its documented rate limit (ADR-0002).
+        authority=RateLimitedAuthority(ShazamOwnAuthority(), min_interval=1.0),
         resolver=_build_resolver(),
         tagwriter=tagwriter,
-        review_queue=JsonReviewQueue(out_dir / "review-queue.json"),
+        review_queue=JsonReviewQueue(out_dir / "review-queue.jsonl"),
     )
 
 
@@ -169,6 +171,12 @@ def main() -> int:
         help="Work through the Review queue instead of downloading",
     )
     parser.add_argument("--out", type=Path, default=Path("downloads"), help="Output directory")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help="How many Tracks of a playlist to process at once (default: engine's)",
+    )
     parser.add_argument("--cookies", type=Path, default=None, help="Cookies file for age-restricted Sources")
     parser.add_argument(
         "--format",
@@ -187,7 +195,8 @@ def main() -> int:
     if args.url is None:
         parser.error("a YouTube URL is required (or pass --review to clear the queue)")
 
-    results = run(Source(url=args.url), providers)
+    run_kwargs = {} if args.concurrency is None else {"concurrency": args.concurrency}
+    results = run(Source(url=args.url), providers, **run_kwargs)
 
     for result in results:
         # A verified Track (no reason) is tagged as truth; anything with a reason
