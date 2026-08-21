@@ -14,6 +14,19 @@ from typing import Protocol
 from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
 
 
+class PlaylistInSingleModeError(Exception):
+    """A bare-playlist Source was submitted in single mode (ADR-0004).
+
+    Single mode identifies one Track; ``noplaylist`` collapses a
+    ``watch?v=…&list=…`` link to its video, but a *bare* playlist URL has no video
+    to fall back to and would expand fully. Rather than silently pick one track or
+    expand, the Downloader refuses such a Source *before* downloading anything and
+    raises this — a whole-Source rejection, distinct from a per-Track skip (which
+    routes to Review and lets the batch continue). The adapter surfaces the
+    message and hands the choice back to the user (pass ``--playlist``).
+    """
+
+
 class Downloader(Protocol):
     """Turns a Source into one or more downloaded Tracks (a playlist yields many)."""
 
@@ -23,7 +36,13 @@ class Downloader(Protocol):
     #: download.
     skipped: list[tuple[str, str]]
 
-    def download(self, source: Source) -> list[Track]: ...
+    def download(self, source: Source) -> list[Track]:
+        """Download the Source's Tracks.
+
+        Raises ``PlaylistInSingleModeError`` when a bare playlist URL is submitted
+        in single mode — the whole Source is refused before anything downloads.
+        """
+        ...
 
 
 class Fingerprinter(Protocol):

@@ -6,15 +6,21 @@ covering "M4A avoids re-encoding native audio; MP3 320 is the fallback".
 
 from pathlib import Path
 
+import pytest
 from yt_dlp.utils import DownloadError
 
 from muzik.domain import Source
+from muzik.providers import PlaylistInSingleModeError
 from muzik.real.downloader import YtDlpDownloader, _track_from_entry
 from muzik.settings import OutputFormat
 
 
 class _RaisingYoutubeDL:
-    """Stands in for yt_dlp.YoutubeDL and fails the download with a given error."""
+    """Stands in for yt_dlp.YoutubeDL and fails the download with a given error.
+
+    Fails on every ``extract_info`` — the single-mode pre-flight classification as
+    well as the download itself — so the error surfaces whichever call runs first.
+    """
 
     def __init__(self, message: str):
         self._message = message
@@ -28,7 +34,7 @@ class _RaisingYoutubeDL:
     def __exit__(self, *exc) -> bool:
         return False
 
-    def extract_info(self, url: str, download: bool):
+    def extract_info(self, url: str, download: bool = True, process: bool = True):
         raise DownloadError(self._message)
 
 
@@ -122,7 +128,7 @@ class _NullInfoYoutubeDL:
     def __exit__(self, *exc) -> bool:
         return False
 
-    def extract_info(self, url: str, download: bool):
+    def extract_info(self, url: str, download: bool = True, process: bool = True):
         return None
 
 
@@ -148,3 +154,98 @@ def test_age_restriction_without_cookies_is_still_skipped(tmp_path, monkeypatch)
 
     assert tracks == []
     assert "cookies" in downloader.skipped[0][1].lower()
+
+
+# --- single-song by default; --playlist to expand (ticket #22) -----------------
+
+
+class _RecordingYoutubeDL:
+    """Fake yt_dlp.YoutubeDL with a scripted pre-flight verdict and download.
+
+    ``preflight`` is what ``extract_info(..., process=False)`` returns (yt-dlp's
+    URL classification); ``download_info`` is what the real ``download=True`` call
+    returns. It records whether a download was ever attempted so a test can prove a
+    refused Source pulls nothing.
+    """
+
+    def __init__(self, preflight: dict | None, download_info: dict | None):
+        self._preflight = preflight
+        self._download_info = download_info
+        self.downloaded = False
+
+    def __call__(self, opts: dict) -> "_RecordingYoutubeDL":
+        return self
+
+    def __enter__(self) -> "_RecordingYoutubeDL":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def extract_info(self, url: str, download: bool = True, process: bool = True):
+        if not download:  # the lightweight classification pre-flight
+            return self._preflight
+        self.downloaded = True
+        return self._download_info
+
+
+def test_single_mode_sets_noplaylist_true(tmp_path):
+    # Default single mode: yt-dlp drops an attached list= for us — no Muzik URL parsing.
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+    assert opts["noplaylist"] is True
+
+
+def test_playlist_mode_sets_noplaylist_false(tmp_path):
+    # --playlist expands the list: noplaylist off for this run only.
+    opts = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)._build_opts()
+    assert opts["noplaylist"] is False
+
+
+def test_a_bare_playlist_in_single_mode_is_refused_and_downloads_nothing(tmp_path, monkeypatch):
+    # yt-dlp classifies a bare playlist URL as _type == "playlist"; single mode
+    # refuses it before any download, rather than silently expanding (ADR-0004).
+    fake = _RecordingYoutubeDL(preflight={"_type": "playlist"}, download_info={"entries": []})
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    with pytest.raises(PlaylistInSingleModeError) as excinfo:
+        downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert "--playlist" in str(excinfo.value)  # an actionable message
+    assert fake.downloaded is False  # nothing was pulled
+    assert downloader.skipped == []  # a refusal is not a per-Track skip
+
+
+def test_a_combined_watch_and_list_url_in_single_mode_downloads_only_the_video(tmp_path, monkeypatch):
+    # With noplaylist on, yt-dlp classifies a watch?v=X&list=… link as its single
+    # video (not a playlist), so single mode proceeds and downloads only Track X.
+    fake = _RecordingYoutubeDL(
+        preflight={"_type": "url", "id": "X"},
+        download_info={"id": "X", "title": "Song X", "uploader": "Chan"},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    tracks = YtDlpDownloader(out_dir=tmp_path).download(
+        Source(url="https://www.youtube.com/watch?v=X&list=RDX")
+    )
+
+    assert fake.downloaded is True
+    assert [t.audio_path.stem for t in tracks] == ["X"]
+
+
+def test_playlist_mode_expands_a_bare_playlist_without_refusing(tmp_path, monkeypatch):
+    # Under --playlist a bare playlist is the whole point: no pre-flight refusal,
+    # and every entry becomes a Track.
+    fake = _RecordingYoutubeDL(
+        preflight={"_type": "playlist"},  # never consulted in playlist mode
+        download_info={"entries": [
+            {"id": "a", "title": "A"}, {"id": "b", "title": "B"},
+        ]},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    tracks = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True).download(
+        Source(url="https://youtube.com/playlist?list=PL")
+    )
+
+    assert [t.audio_path.stem for t in tracks] == ["a", "b"]

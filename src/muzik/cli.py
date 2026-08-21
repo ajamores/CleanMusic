@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
 from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
-from muzik.providers import Resolver
+from muzik.providers import PlaylistInSingleModeError, Resolver
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
@@ -52,8 +52,15 @@ def _build_resolver() -> Resolver:
     return HaikuResolver()
 
 
-def _build_downloader(out_dir: Path, cookies: Path | None, fmt: OutputFormat) -> YtDlpDownloader:
-    return YtDlpDownloader(out_dir=out_dir, cookies=cookies, output_format=fmt)
+def _build_downloader(
+    out_dir: Path,
+    cookies: Path | None,
+    fmt: OutputFormat,
+    expand_playlist: bool = False,
+) -> YtDlpDownloader:
+    return YtDlpDownloader(
+        out_dir=out_dir, cookies=cookies, output_format=fmt, expand_playlist=expand_playlist
+    )
 
 
 def _build_providers(
@@ -179,6 +186,11 @@ def main() -> int:
     )
     parser.add_argument("--cookies", type=Path, default=None, help="Cookies file for age-restricted Sources")
     parser.add_argument(
+        "--playlist",
+        action="store_true",
+        help="Expand a playlist link (default: take just the Track, ignoring an attached list)",
+    )
+    parser.add_argument(
         "--format",
         choices=sorted(_FORMAT_CHOICES),
         default=None,
@@ -187,7 +199,7 @@ def main() -> int:
     args = parser.parse_args()
 
     fmt = _resolve_format(args.format)
-    downloader = _build_downloader(args.out, args.cookies, fmt)
+    downloader = _build_downloader(args.out, args.cookies, fmt, expand_playlist=args.playlist)
     providers = _build_providers(downloader, fmt, args.out)
 
     if args.review:
@@ -196,7 +208,13 @@ def main() -> int:
         parser.error("a YouTube URL is required (or pass --review to clear the queue)")
 
     run_kwargs = {} if args.concurrency is None else {"concurrency": args.concurrency}
-    results = run(Source(url=args.url), providers, **run_kwargs)
+    try:
+        results = run(Source(url=args.url), providers, **run_kwargs)
+    except PlaylistInSingleModeError as refusal:
+        # A bare playlist in single mode: nothing was downloaded. Hand the choice
+        # back to the user rather than running an empty batch (ADR-0004).
+        print(f"refused: {refusal}")
+        return 2
 
     for result in results:
         # A verified Track (no reason) is tagged as truth; anything with a reason
