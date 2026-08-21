@@ -16,6 +16,7 @@ import yt_dlp
 from yt_dlp.utils import DownloadError
 
 from muzik.domain import Source, Track
+from muzik.providers import PlaylistInSingleModeError
 from muzik.settings import DEFAULT_FORMAT, OutputFormat
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,19 @@ _AGE_MARKERS = (
 def _is_age_restriction(error: Exception) -> bool:
     message = str(error).lower()
     return any(marker in message for marker in _AGE_MARKERS)
+
+
+def _is_bare_playlist(ydl: "yt_dlp.YoutubeDL", url: str) -> bool:
+    """yt-dlp's own verdict on whether ``url`` is a bare playlist (ADR-0004).
+
+    A lightweight pre-flight: ``process=False`` resolves the URL's type but pulls
+    no tracks. With ``noplaylist`` set (single mode) a ``watch?v=…&list=…`` link
+    resolves to its single video, so only a bare playlist URL classifies as
+    ``playlist``. The verdict is yt-dlp's, never a Muzik URL regex — the address
+    formats are yt-dlp's to understand.
+    """
+    info = ydl.extract_info(url, download=False, process=False)
+    return bool(info) and info.get("_type") == "playlist"
 
 
 def _track_from_entry(
@@ -61,10 +75,15 @@ class YtDlpDownloader:
         out_dir: Path,
         cookies: Path | None = None,
         output_format: OutputFormat = DEFAULT_FORMAT,
+        expand_playlist: bool = False,
     ):
         self._out_dir = Path(out_dir)
         self._cookies = cookies
         self._output_format = output_format
+        #: Single by default (ADR-0004): a Source names one Track, and an attached
+        #: ``list=`` is dropped. ``--playlist`` sets this True for one run to expand
+        #: the list; it is never persisted.
+        self._expand_playlist = expand_playlist
         #: ``(title_or_url, reason)`` for every Source skipped this batch.
         self.skipped: list[tuple[str, str]] = []
 
@@ -89,6 +108,10 @@ class YtDlpDownloader:
             "postprocessors": [extract],
             "quiet": True,
             "noprogress": True,
+            # Single by default (ADR-0004): yt-dlp drops an attached ``list=`` when
+            # the URL also names a video, so no Muzik-side URL parsing. ``--playlist``
+            # flips this to expand the list.
+            "noplaylist": not self._expand_playlist,
             # Re-running a Source must not re-download Tracks already fetched (#8).
             # yt-dlp records each downloaded video's id here and skips any it has
             # already seen on a later run; skipped entries come back falsy and are
@@ -103,6 +126,13 @@ class YtDlpDownloader:
         self._out_dir.mkdir(parents=True, exist_ok=True)
         try:
             with yt_dlp.YoutubeDL(self._build_opts()) as ydl:
+                if not self._expand_playlist and _is_bare_playlist(ydl, source.url):
+                    # Refuse a bare playlist in single mode *before* downloading —
+                    # it has no video to collapse to, so it would expand fully
+                    # (ADR-0004). A whole-Source rejection, not a per-Track skip.
+                    raise PlaylistInSingleModeError(
+                        "that's a playlist; pass --playlist to download all of it"
+                    )
                 info = ydl.extract_info(source.url, download=True)
         except DownloadError as error:
             # Any download failure — age wall, private/deleted video, network —
