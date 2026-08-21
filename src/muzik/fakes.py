@@ -30,6 +30,7 @@ class FakeDownloader:
         output_format: OutputFormat = OutputFormat.M4A,
         cookies: Path | None = None,
         entries: Sequence[tuple[str, bool]] | None = None,
+        download_archive: set[str] | None = None,
     ):
         self._audio_path = audio_path
         self._title = title
@@ -38,12 +39,19 @@ class FakeDownloader:
         self._cookies = cookies
         #: Each entry is ``(title, age_restricted)``.
         self._entries = list(entries) if entries is not None else [(title, False)]
+        #: Stands in for yt-dlp's download archive (#8): a persistent set of the
+        #: titles already fetched. When provided, a re-run skips entries in it and
+        #: records freshly fetched ones — so the same set across two ``download``
+        #: calls proves already-fetched Tracks are not re-downloaded.
+        self._archive = download_archive
         #: ``(title, reason)`` for every entry skipped this batch.
         self.skipped: list[tuple[str, str]] = []
 
     def download(self, source: Source) -> list[Track]:
         tracks: list[Track] = []
         for index, (title, age_restricted) in enumerate(self._entries):
+            if self._archive is not None and title in self._archive:
+                continue  # already fetched on a prior run — not re-downloaded
             if age_restricted and self._cookies is None:
                 self.skipped.append(
                     (title, "age-restricted Source needs --cookies to download")
@@ -58,6 +66,8 @@ class FakeDownloader:
                     uploader=self._uploader,
                 )
             )
+            if self._archive is not None:
+                self._archive.add(title)
         return tracks
 
 

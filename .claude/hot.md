@@ -12,34 +12,35 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Real providers are built and wired in `cli.py`: yt-dlp download, **Shazam** fingerprint (`shazamio`), **MusicBrainz** album-by-ISRC, **Haiku** resolver, MP3/M4A tag writers, JSON review queue. Identity comes from the audio fingerprint; the fakes are test doubles for whole-box tests. Wave 2 is polish, not the core build.
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Real providers are built and wired in `cli.py`: yt-dlp download, **Shazam** fingerprint (`shazamio`), **MusicBrainz** album-by-ISRC, **Haiku** Resolver, MP3/M4A tag writers, JSON review queue. Identity comes from the audio fingerprint; the fakes are test doubles for whole-box tests. Wave 2 is polish, not the core build.
 
 ## Current State (2026-08-20)
 
-- Branch **`main`**, in sync with `origin/main` (HEAD `95c3aeb`). **38 tests green.**
-- **#14 shipped and closed** (PR #15): the Confidence gate no longer stamps a low-confidence, **channel-only** Match `verified`. When the artist agreement rests solely on the uploader (a channel name anyone can set), the Match must clear `_UPLOADER_ONLY_MIN_CONFIDENCE = 0.9` or it's kept unverified → Review queue. A title-corroborated artist is unaffected. Recorded as an ADR-0003 amendment.
-- Pipeline shape: `download → _album_waterfall → _confidence_gate → _write`; `run()` also enqueues reviewables + drains `downloader.skipped`.
+- Branch **`main`** (HEAD `00eeb59`, #7 merged). **#8 built locally, 76 tests green, uncommitted** — next step is commit → PR → merge → close.
+- **#8 done** (Playlist + bounded concurrency): `engine.run()` fans `_process_track` across a bounded `ThreadPoolExecutor` (`_DEFAULT_CONCURRENCY=4`, `run(..., concurrency=)`), results in Track order, enqueue on the main thread (single-writer queue). **`RateLimitedAuthority`** wraps the Authority — throttles only `canonical_album` to ~1 req/s (ADR-0002), `tags_for` passes through; wired in `cli.py`. **`JsonReviewQueue` → JSON Lines**: O(1) append, torn-tail-tolerant read (`_has_unterminated_tail` closes a torn tail before append; `_load` skips unparseable lines). yt-dlp **`download_archive`** in out_dir skips already-fetched Tracks on re-run; `FakeDownloader` gained an archive sim + `--concurrency` CLI flag. Queue file renamed `review-queue.json` → `.jsonl`.
+- **#7 done** (PR #19): Review-queue clear pass — accept / manual / hint / skip over a `ReviewPrompter` seam.
+- Waterfall complete: fingerprint album → MusicBrainz-by-ISRC → Resolver.
 
 ## What's next
 
-- **Wave 2 continues, one ticket per fresh session.** Ready: **#8** (Playlist + bounded concurrency), **#4** (Resolver / Claude Haiku). **#7** (clear the queue) needs only **#4**.
-- Loop per ticket: `/clear` → `/implement` (drives `/tdd` then `/code-review`) → commit → PR → merge → close. Small already-diagnosed fixes: `/tdd` alone.
+- Commit #8, open PR, merge, close #8. Two-axis review already run — clean (no hard findings; addressed the test-dedup + AC3 end-to-end coverage notes).
+- Wave 2 remaining tickets, one per fresh session. Loop: `/clear` → `/implement` → commit → PR → merge → close.
 - Before any worktree fan-out: **`git push` the prep commit first** (worktrees branch from pushed remote — `docs/LEARNINGS.md`).
 
-## Open threads
+## Parked (filed, blocked on live provider behaviour)
 
-- **Residual gate gap (known, accepted for now):** #14 only closes the *low-confidence* channel-impersonation case. A **confident-wrong** Match on a channel named after the wrong artist still verifies — no test separates a real artist channel from one merely named after the artist. Revisit once the real Fingerprinter lands (its confidence distribution is what sets the bar).
-- **Queue write is O(n²)/batch** — noted in `review_queue.py` docstring; revisit for #8's playlists (JSON Lines appends O(1)).
+- **#16** — confident-wrong Match on an impersonator channel still verifies.
+- **#17** — Resolver-proposed albums get `verified` without an independent check (gate cross-checks the Source title, not the Resolver). Sibling of #16.
 
 ## Recent sessions (rolling — last 2–3)
 
-- **2026-08-20 (#14)** — Gated the uploader-only verify path on `Match.confidence`. Filed the weakness (surfaced in the #6 review) as an issue first, TDD'd the fix, two-axis review (dedup cleanup + added the missing high-confidence test), ADR-0003 amendment. Merged PR #15.
-- **2026-08-20 (#6)** — Persisted Review queue + summary; all `DownloadError`s route to the queue. Merged PR #13.
-- **2026-08-20 (#11)** — Artist-aware Confidence gate; uploader as second witness. ADR-0003.
+- **2026-08-20 (#8)** — Playlist + bounded concurrency: `ThreadPoolExecutor` in `run()`, `RateLimitedAuthority` (~1 req/s), JSONL O(1) crash-safe queue, yt-dlp `download_archive`. 17 new tests (76 green). Two-axis review clean.
+- **2026-08-20 (#7)** — Review-queue clear pass (accept/manual/hint/skip) over a `ReviewPrompter` seam. Merged PR #19.
+- **2026-08-20 (#4)** — Wired the Resolver as the album waterfall's final tier + graceful key handling. Filed #17 from the spec-axis note. Merged PR #18.
 
 ## Where the rest of the context lives
 
-- **Decisions:** `docs/adr/` — `0001`/`0002`/`0003` (0003 now carries the #14 amendment). **Glossary:** `CONTEXT.md`. **Spec:** issue #1. **Tickets:** #4, #7, #8.
+- **Decisions:** `docs/adr/` — `0001`/`0002`/`0003`. **Glossary:** `CONTEXT.md`. **Spec:** issue #1. **Tickets:** #7, #8; parked #16, #17.
 - **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md`.
 - **Prototype code + verdict tables:** branch `prototype/identify-spike`.
 - **Garden vault** (business/decisions): `/graft` to push, not this board.

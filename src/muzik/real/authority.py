@@ -9,9 +9,17 @@ and the Resolver tier arrive in later tickets; until then Tags are provisional.
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
 import musicbrainzngs
 
 from muzik.domain import Match, Tags
+
+if TYPE_CHECKING:
+    from muzik.providers import Authority
 
 musicbrainzngs.set_useragent(
     "muzik", "0.1.0", "https://github.com/armand/muzik"
@@ -58,3 +66,47 @@ class ShazamOwnAuthority:
                 if primary == "album" and not secondary:
                     return group.get("title") or release.get("title")
         return None
+
+
+class RateLimitedAuthority:
+    """Wraps an Authority so its network tier stays within a rate limit under
+    concurrency (ADR-0002: MusicBrainz allows ~1 request/second).
+
+    A playlist batch runs Tracks concurrently (#8), so several threads can reach
+    the album lookup at once. Only ``canonical_album`` hits the network, so only
+    it is throttled: calls are serialised through a lock and spaced by at least
+    ``min_interval`` seconds. ``tags_for`` is pure (Tags from the Match) and passes
+    straight through, unthrottled — throttling it would needlessly serialise the
+    whole batch.
+    """
+
+    def __init__(
+        self,
+        inner: "Authority",
+        min_interval: float = 1.0,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._inner = inner
+        self._min_interval = min_interval
+        self._sleep = sleep
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def tags_for(self, match: Match) -> Tags:
+        return self._inner.tags_for(match)
+
+    def canonical_album(self, isrc: str | None) -> str | None:
+        # Holding the lock across the inner call keeps two MusicBrainz requests
+        # from ever being in flight together; the spacing keeps successive calls
+        # under the rate limit even when the pool has work queued behind them.
+        with self._lock:
+            wait = self._next_allowed - self._clock()
+            if wait > 0:
+                self._sleep(wait)
+            try:
+                return self._inner.canonical_album(isrc)
+            finally:
+                self._next_allowed = self._clock() + self._min_interval

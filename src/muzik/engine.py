@@ -12,6 +12,7 @@ touching the others: #3/#4 grow ``_album_waterfall``, #5 fills ``_confidence_gat
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -80,24 +81,52 @@ def summarize(results: list[TrackResult], skipped_count: int = 0) -> BatchSummar
     return BatchSummary(verified=verified, queued=queued)
 
 
-def run(source: Source, providers: Providers) -> list[TrackResult]:
+#: How many Tracks the batch processes at once by default. Downloads dominate the
+#: wall-clock and tagging is cheap (~0.4s/track, ADR-0002); the Authority's own
+#: rate limiter — not this bound — is what keeps its network tier within
+#: MusicBrainz's 1 req/sec, so a modest default is plenty.
+_DEFAULT_CONCURRENCY = 4
+
+
+def run(
+    source: Source, providers: Providers, *, concurrency: int = _DEFAULT_CONCURRENCY
+) -> list[TrackResult]:
     """Process a Source end to end, returning one result per downloaded Track.
 
-    Every reviewable Track — a gate failure, an unidentified Track, or a
-    Downloader skip — is appended to the Review queue with a reason, and the
-    batch runs to completion regardless (CONTEXT.md: the batch never blocks).
-    The per-Track pipeline lives in ``_process_track``; this loop is the seam #8
-    replaces with bounded concurrency.
+    A playlist Source expands into many Tracks (#8); once downloaded they are
+    independent, so the per-Track pipeline (``_process_track``) runs across a
+    bounded thread pool and the results come back in Track order. Every reviewable
+    Track — a gate failure, an unidentified Track, or a Downloader skip — is then
+    appended to the Review queue with a reason, and the batch runs to completion
+    regardless (CONTEXT.md: the batch never blocks).
     """
-    results: list[TrackResult] = []
-    for track in providers.downloader.download(source):
-        result = _process_track(track, providers)
+    tracks = providers.downloader.download(source)
+    results = _process_tracks(tracks, providers, concurrency)
+    # Enqueue on this thread, not the workers: it keeps the Review queue a single
+    # writer (its append needs no lock) and the queue order deterministic —
+    # reviewable Tracks in playlist order, then the Downloader's own skips.
+    for track, result in zip(tracks, results):
         if result.reason is not None:
             providers.review_queue.enqueue(_review_item(result, track))
-        results.append(result)
     for source_url, reason in providers.downloader.skipped:
         providers.review_queue.enqueue(ReviewItem(source_url=source_url, reason=reason))
     return results
+
+
+def _process_tracks(
+    tracks: list[Track], providers: Providers, concurrency: int
+) -> list[TrackResult]:
+    """Run the per-Track pipeline over a bounded thread pool, preserving order.
+
+    ``ThreadPoolExecutor.map`` yields results in submission order, so the returned
+    list lines up with ``tracks`` regardless of which finished first. An empty
+    playlist needs no pool.
+    """
+    if not tracks:
+        return []
+    workers = max(1, min(concurrency, len(tracks)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda track: _process_track(track, providers), tracks))
 
 
 def _process_track(track: Track, providers: Providers) -> TrackResult:

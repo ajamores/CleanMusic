@@ -53,6 +53,14 @@ def test_mp3_320_is_the_reencoded_fallback(tmp_path):
     assert pp["preferredquality"] == "320"
 
 
+def test_a_download_archive_in_the_out_dir_skips_already_fetched_tracks(tmp_path):
+    # Re-running a Source must not re-download already-fetched Tracks (#8): yt-dlp's
+    # download archive records fetched video ids and skips them next run. It lives
+    # in the out dir so it persists alongside the Tracks it tracks.
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+    assert opts["download_archive"] == str(tmp_path / ".download-archive.txt")
+
+
 def test_cookiefile_added_only_when_cookies_given(tmp_path):
     cookies = tmp_path / "cookies.txt"
     with_cookies = YtDlpDownloader(out_dir=tmp_path, cookies=cookies)._build_opts()
