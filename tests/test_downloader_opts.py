@@ -109,6 +109,35 @@ def test_a_generic_download_failure_is_skipped_not_raised(tmp_path, monkeypatch)
     assert reason  # a non-empty reason for the user
 
 
+class _NullInfoYoutubeDL:
+    """Stands in for yt_dlp.YoutubeDL when extract_info returns None — every entry
+    was already in the download archive (a re-run), so nothing was downloaded."""
+
+    def __call__(self, opts: dict) -> "_NullInfoYoutubeDL":
+        return self
+
+    def __enter__(self) -> "_NullInfoYoutubeDL":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def extract_info(self, url: str, download: bool):
+        return None
+
+
+def test_a_fully_archived_run_yields_no_tracks_without_crashing(tmp_path, monkeypatch):
+    # Re-running a Source whose videos are all in the download archive makes yt-dlp
+    # return None. That must be an empty result, not a crash (#8 regression).
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", _NullInfoYoutubeDL())
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/already-fetched"))
+
+    assert tracks == []
+    assert downloader.skipped == []  # not a failure — just nothing new to fetch
+
+
 def test_age_restriction_without_cookies_is_still_skipped(tmp_path, monkeypatch):
     # The existing friendly age-restriction path must survive the broadened catch.
     raiser = _RaisingYoutubeDL("ERROR: Sign in to confirm your age")
