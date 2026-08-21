@@ -95,7 +95,7 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     match = providers.fingerprinter.identify(track)
     if match is None:
         return _review(track, "no fingerprint match")
-    tags = _album_waterfall(match, providers)
+    tags = _album_waterfall(track, match, providers)
     tags, reason = _confidence_gate(track, match, tags)
     output_path = _write(track, tags, providers)
     return TrackResult(
@@ -132,22 +132,32 @@ def _looks_canonical(album: str) -> bool:
     return words.isdisjoint(_NON_CANONICAL_MARKERS)
 
 
-def _album_waterfall(match: Match, providers: Providers) -> Tags:
-    """First tier of the album waterfall (ADR-0002, ticket #3).
+def _album_waterfall(track: Track, match: Match, providers: Providers) -> Tags:
+    """The album waterfall (ADR-0002, tickets #3 + #4), consulted in order.
 
-    Keep the fingerprint's album when it already looks canonical. When it looks
-    non-canonical (single / EP / remix) or is missing, ask the Authority for the
-    recording's canonical studio album by ISRC and substitute it. A miss (no ISRC,
-    or MusicBrainz returns nothing) leaves the album unchanged. #4 adds the
-    Resolver tier below this.
+    Keep the fingerprint's album when it already looks canonical. Otherwise
+    (non-canonical — single / EP / remix — or missing) descend the waterfall:
+
+      1. the Authority's canonical studio album by ISRC (MusicBrainz), skipped
+         when there is no ISRC to look up;
+      2. the Resolver (Claude Haiku, #4), the last resort, consulted only when
+         the album is *still* unresolved after the catalogs.
+
+    Each tier fires only while the album is unresolved, so a canonical album — or
+    one MusicBrainz supplies — never reaches the Resolver. A tier that yields
+    nothing leaves the album unchanged and the next tier tries.
     """
     tags = providers.authority.tags_for(match)
-    if _looks_canonical(match.album) or not match.isrc:
+    if _looks_canonical(match.album):
         return tags
-    studio_album = providers.authority.canonical_album(match.isrc)
-    if not studio_album:
-        return tags
-    return replace(tags, album=studio_album)
+    if match.isrc:
+        studio_album = providers.authority.canonical_album(match.isrc)
+        if studio_album:
+            return replace(tags, album=studio_album)
+    resolved = providers.resolver.resolve(track, match)
+    if resolved is not None and resolved.album:
+        return replace(tags, album=resolved.album)
+    return tags
 
 
 # --- Confidence gate (ADR-0002, ticket #5) -------------------------------------

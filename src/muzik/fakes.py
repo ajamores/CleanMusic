@@ -6,6 +6,7 @@ Each mirrors the seam of its real counterpart so the engine can't tell them apar
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from muzik.domain import Match, ReviewItem, Source, Tags, Track
@@ -98,10 +99,23 @@ class FakeAuthority:
 
 
 class FakeResolver:
-    """Injected for its seam; proposes nothing on the skeleton path."""
+    """Stands in for the AI Resolver's final waterfall tier (#4).
+
+    ``resolve`` proposes the preset ``album`` (folded onto the Match), or nothing
+    when ``album`` is None — the default, which mirrors a Resolver that declines.
+    Each call is recorded on ``resolve_calls`` so a whole-box test can assert
+    whether the tier was reached at all (it must fire only when the catalogs miss).
+    """
+
+    def __init__(self, album: str | None = None) -> None:
+        self._album = album
+        self.resolve_calls: list[Match | None] = []
 
     def resolve(self, track: Track, match: Match | None) -> Match | None:
-        return None
+        self.resolve_calls.append(match)
+        if match is None or not self._album:
+            return None
+        return replace(match, album=self._album)
 
 
 class FakeTagWriter:
