@@ -11,3 +11,14 @@ The Confidence gate (ADR-0002) now cross-checks the Match on **both** title and 
 - `Track.uploader` is the only new field; the gate logic stays inside the engine, so the domain type carries the raw channel and normalisation is a gate concern.
 - The `…VEVO` normalisation is literal (`"RickAstleyVEVO"` → `"RickAstley"`), which tokenises as one word and will not always match a spaced artist — it errs toward unverified, which the ADR endorses.
 - Folding `Match.confidence` into the gate's strictness is still open (its own ticket), as is the Review-queue routing of unverified Tracks (#6).
+
+## Amendment (#14): the two witnesses are not independent
+
+Adding the uploader as the second witness left a hole. The witness `{parsed title-artist} ∪ {normalised uploader}` treats the channel name as evidence, but **anyone can name a channel after any artist** — a topic re-upload, a fan channel, an impersonator. So when the fingerprint returns the *wrong* Match and the Source sits on a channel named after that wrong artist, both witnesses agree and the gate stamps a wrong tag `verified`. Two witnesses, but one is a nametag the channel wrote itself — the exact false-`verified` the gate exists to prevent.
+
+There is no test that separates a real artist channel from one merely named after the artist; a channel can *assert* an identity as easily as confirm it. So the lever is **not** independence but **confidence**: the gate is only fooled when the Match was wrong, which is the low-confidence case. Folding `Match.confidence` in (the open ticket above) closes it.
+
+**Rule.** The Source's own title is an *independent* witness a channel cannot fake; the uploader is not. When the artist agreement rests **solely** on the uploader (the Source title does not corroborate the artist on its own), the Match is verified only if `Match.confidence >= _UPLOADER_ONLY_MIN_CONFIDENCE`. Below the bar it is kept but left unverified (Review queue). When the Source's own title independently corroborates the artist, confidence is not consulted — that path is unchanged.
+
+- **Threshold = `0.9`.** A deliberately high bar: the channel-only path is the weakest evidence the gate accepts, so it demands the fingerprinter be near-certain. It sits below the `0.99` that fixtures and real high-confidence matches carry, so genuine official-channel uploads (`"Artist - Topic"`, `"…VEVO"`) still verify. The value is a single named constant in `engine.py`; revisit against real fingerprint-confidence distributions once the real Fingerprinter lands.
+- Bias remains toward strictness (ADR-0002): a wrong tag written as truth is worse than an honest weak one, and a channel name alone is not truth.
