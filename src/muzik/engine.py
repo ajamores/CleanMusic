@@ -157,6 +157,9 @@ def _album_waterfall(match: Match, providers: Providers) -> Tags:
 # Match is routed to the Review queue upstream). Three outcomes:
 #
 #   * Agreement  — the Source title echoes the Match  -> verified Tags, no marker.
+#                  Caveat (#14): when only the uploader (a channel name anyone can
+#                  set) backs the artist, verification also needs a confident Match;
+#                  a low-confidence, channel-only Match is kept unverified instead.
 #   * Disagreement — the Source title names a different "Artist - Title"
 #                    -> best-effort provisional Tags parsed from the Source,
 #                       marked unverified (`verified=False`). The Match is never
@@ -232,6 +235,15 @@ def _artist_corroborates(match: Match, witness_tokens: set[str]) -> bool:
     return artist_tokens <= witness_tokens
 
 
+#: The confidence a Match must clear to be verified when the *only* artist
+#: witness is the uploader. The Source's own title is an independent witness a
+#: channel can't fake; the channel name is not — anyone can name a channel after
+#: an artist. So a Match backed solely by the channel must also be one the
+#: fingerprinter is sure of, or an impersonator channel confirms a wrong Match
+#: (#14 / ADR-0003). Below the bar the Match is kept but left unverified.
+_UPLOADER_ONLY_MIN_CONFIDENCE = 0.9
+
+
 #: YouTube's auto-generated artist channels ("Rick Astley - Topic") and label
 #: channels ("RickAstleyVEVO") dress the artist name; strip the dressing so the
 #: bare artist is left ("Rick Astley").
@@ -270,10 +282,18 @@ def _confidence_gate(track: Track, match: Match, tags: Tags) -> tuple[Tags, str 
     accepted a confident-wrong Match whenever the title was a common word.
     """
     uploader_artist = _normalise_uploader(track.uploader)
-    witness = _identity_tokens(_source_artist(track.source_title)) | _identity_tokens(
-        uploader_artist
+    title_witness = _identity_tokens(_source_artist(track.source_title))
+    witness = title_witness | _identity_tokens(uploader_artist)
+    artist_corroborated = _artist_corroborates(match, witness)
+    # When the artist agreement rests *solely* on the uploader — the Source's own
+    # title does not vouch for it — the channel is the only witness, and a channel
+    # name is assertable, not evidence. Such a Match is verified only if the
+    # fingerprinter is also confident; otherwise it is kept, unverified (#14).
+    uploader_only = artist_corroborated and not _artist_corroborates(match, title_witness)
+    confident_enough = (
+        not uploader_only or match.confidence >= _UPLOADER_ONLY_MIN_CONFIDENCE
     )
-    if _agrees(match, track.source_title) and _artist_corroborates(match, witness):
+    if _agrees(match, track.source_title) and artist_corroborated and confident_enough:
         return replace(tags, verified=True), None
     provisional = _provisional_from_source(track.source_title, uploader_artist)
     if provisional is not None:

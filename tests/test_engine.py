@@ -248,6 +248,86 @@ def test_confidence_gate_keeps_the_match_unverified_when_there_is_no_signal():
     assert result.tags.album == "Monologues"
 
 
+def test_confidence_gate_rejects_a_low_confidence_match_backed_only_by_the_channel_name():
+    # The channel-impersonation hole (#14): the fingerprint is UNSURE (low
+    # confidence), the Source title merely echoes the Match's title, and the only
+    # artist witness is the uploader — a channel *named* after the Match's artist,
+    # which anyone can set. Two witnesses, but one is a nametag the channel wrote
+    # itself. A low-confidence Match must not ride the channel name to verified.
+    match = Match(
+        title="Hello",
+        artist="Adele",
+        album="25",
+        cover_art=b"JPEGBYTES",
+        confidence=0.4,
+    )
+    writer = FakeTagWriter()
+    results = run(
+        Source(url="https://youtu.be/imp"),
+        _providers(match, writer, source_title="Hello (Official Video)", uploader="Adele"),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    # Unsure fingerprint + channel-name-only witness → not verified, queued.
+    assert result.tags.verified is False
+    assert result.reason is not None
+    # The Match is kept (not clobbered with garbage), just left for review.
+    assert result.tags.title == "Hello"
+    assert result.tags.artist == "Adele"
+
+
+def test_confidence_gate_verifies_a_low_confidence_match_the_source_title_itself_backs():
+    # The independence clause (#14): confidence only gates the *uploader-only*
+    # case. When the Source's own title carries the artist ("Adele - Hello"), that
+    # is an independent witness the channel can't fake, so a low-confidence Match
+    # is still verified — the confidence factor must not touch this path.
+    match = Match(
+        title="Hello",
+        artist="Adele",
+        album="25",
+        cover_art=b"JPEGBYTES",
+        confidence=0.4,
+    )
+    writer = FakeTagWriter()
+    results = run(
+        Source(url="https://youtu.be/ind"),
+        _providers(match, writer, source_title="Adele - Hello (Official Video)"),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    assert result.tags.verified is True
+    assert result.tags.artist == "Adele"
+    assert result.tags.title == "Hello"
+
+
+def test_confidence_gate_verifies_a_high_confidence_match_backed_by_the_channel_name():
+    # The other side of the #14 bar, paired with the reject test above: same
+    # uploader-only shape, but a confident fingerprint (0.99). When the Match
+    # clears the confidence bar the channel witness is trusted and the Match is
+    # verified — the #11 official-channel happy path stays intact. The 0.99 here
+    # is load-bearing: drop it below the bar and this must flip to unverified.
+    match = Match(
+        title="Hello",
+        artist="Adele",
+        album="25",
+        cover_art=b"JPEGBYTES",
+        confidence=0.99,
+    )
+    writer = FakeTagWriter()
+    results = run(
+        Source(url="https://youtu.be/vev"),
+        _providers(match, writer, source_title="Hello (Official Video)", uploader="Adele"),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    assert result.tags.verified is True
+    assert result.tags.artist == "Adele"
+    assert result.tags.title == "Hello"
+
+
 def test_no_match_routes_to_the_review_queue():
     writer = FakeTagWriter()
     results = run(Source(url="https://youtu.be/xyz"), _providers(None, writer))
