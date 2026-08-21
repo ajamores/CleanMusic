@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from muzik.domain import Source
+from muzik.domain import Match, Source, Track
 from muzik.engine import Providers, run, summarize
+from muzik.providers import Resolver
 from muzik.real.authority import ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
@@ -19,6 +21,35 @@ from muzik.settings import OutputFormat, Settings, load_settings, save_settings
 
 # CLI spellings for the saved formats.
 _FORMAT_CHOICES = {"m4a": OutputFormat.M4A, "mp3-320": OutputFormat.MP3_320}
+
+
+class _DisabledResolver:
+    """The AI Resolver tier, switched off when no Claude key is configured.
+
+    The key comes from the environment / gitignored .env (``load_dotenv`` in
+    ``main``). Without it the last waterfall tier proposes nothing rather than
+    crashing the batch on client construction — Tracks it would have resolved get
+    provisional Tags and a place in the Review queue instead (CONTEXT.md: the
+    batch never blocks).
+    """
+
+    def resolve(self, track: Track, match: Match | None) -> Match | None:
+        return None
+
+
+def _build_resolver() -> Resolver:
+    """The real Haiku Resolver when a Claude key is present, else a disabled one.
+
+    An absent key is reported once, plainly, and degrades the AI tier instead of
+    failing — see ``_DisabledResolver``.
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "note: no ANTHROPIC_API_KEY (set it in the environment or a .env file) — "
+            "the AI album Resolver is disabled; Tracks needing it go to review."
+        )
+        return _DisabledResolver()
+    return HaikuResolver()
 
 
 def _build_downloader(out_dir: Path, cookies: Path | None, fmt: OutputFormat) -> YtDlpDownloader:
@@ -33,7 +64,7 @@ def _build_providers(
         downloader=downloader,
         fingerprinter=ShazamFingerprinter(),
         authority=ShazamOwnAuthority(),
-        resolver=HaikuResolver(),
+        resolver=_build_resolver(),
         tagwriter=tagwriter,
         review_queue=JsonReviewQueue(out_dir / "review-queue.json"),
     )
