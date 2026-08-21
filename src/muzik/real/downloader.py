@@ -117,6 +117,12 @@ class YtDlpDownloader:
             self.skipped.append((source.url, reason))
             return []
 
+        if info is None:
+            # yt-dlp returns None when it downloaded nothing — every entry was
+            # already in the download archive (a re-run, #8), or the Source held
+            # no playable video. Not a failure: there are simply no new Tracks.
+            return []
+
         suffix = self._output_format.file_suffix
         entries = info.get("entries") if "entries" in info else [info]
         return [
