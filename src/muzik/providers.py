@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from muzik.domain import Match, ReviewItem, Source, Tags, Track
+from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
 
 
 class Downloader(Protocol):
@@ -64,8 +64,28 @@ class TagWriter(Protocol):
 class ReviewQueue(Protocol):
     """The persisted set of Tracks too uncertain to auto-tag (CONTEXT.md).
 
-    The engine appends to it during a batch; the batch never blocks on it. #7
-    adds the read/clear side the user works through afterwards.
+    The engine appends to it during a batch; the batch never blocks on it. The
+    read/clear side (#7) reads every entry back with ``items`` and rewrites the
+    survivors with ``replace_all`` once the user has worked through them.
     """
 
     def enqueue(self, item: ReviewItem) -> None: ...
+
+    def items(self) -> list[ReviewItem]:
+        """Every entry currently in the queue, in the order it was enqueued."""
+        ...
+
+    def replace_all(self, items: list[ReviewItem]) -> None:
+        """Overwrite the queue with ``items`` — the survivors of a clear pass."""
+        ...
+
+
+class ReviewPrompter(Protocol):
+    """Asks the user what to do with one Review-queue entry (#7).
+
+    The clear side of the engine is interface-agnostic (ADR-0001): it drives this
+    seam rather than reading input itself. The CLI implements it over stdin; a
+    test scripts it.
+    """
+
+    def decide(self, item: ReviewItem) -> ReviewDecision: ...

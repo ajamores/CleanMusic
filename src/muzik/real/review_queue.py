@@ -34,6 +34,10 @@ class JsonReviewQueue:
     def items(self) -> list[ReviewItem]:
         return [_from_record(record) for record in self._load()]
 
+    def replace_all(self, items: list[ReviewItem]) -> None:
+        """Overwrite the queue with ``items`` — the survivors of a clear pass (#7)."""
+        self._write_atomic([_to_record(item) for item in items])
+
     def _load(self) -> list[dict]:
         if not self._path.exists():
             return []
@@ -64,6 +68,7 @@ def _to_record(item: ReviewItem) -> dict:
         "source_url": item.source_url,
         "reason": item.reason,
         "output_path": str(item.output_path) if item.output_path is not None else None,
+        "audio_path": str(item.audio_path) if item.audio_path is not None else None,
         "tags": None
         if tags is None
         else {
@@ -88,9 +93,11 @@ def _from_record(record: dict) -> ReviewItem:
         )
     )
     output_path = record.get("output_path")
+    audio_path = record.get("audio_path")
     return ReviewItem(
         source_url=record["source_url"],
         reason=record["reason"],
         tags=tags,
         output_path=Path(output_path) if output_path is not None else None,
+        audio_path=Path(audio_path) if audio_path is not None else None,
     )

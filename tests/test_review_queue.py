@@ -52,7 +52,7 @@ def test_a_verified_track_is_not_queued():
         _providers(_MATCH, queue, source_title="Ogi - Envy (Official Video)"),
     )
     assert results[0].tags.verified is True
-    assert queue.items == []
+    assert queue.items() == []
     assert summarize(results).verified == 1
     assert summarize(results).queued == 0
 
@@ -70,8 +70,8 @@ def test_a_gate_failure_is_queued_with_its_provisional_tags_and_a_reason():
         ),
     )
     assert results[0].tags.verified is False
-    assert len(queue.items) == 1
-    item = queue.items[0]
+    assert len(queue.items()) == 1
+    item = queue.items()[0]
     assert item.source_url == "https://youtu.be/bad"
     assert item.tags is not None
     assert item.tags.artist == "Rick Astley"
@@ -84,9 +84,9 @@ def test_a_fingerprint_miss_is_queued_with_a_reason():
     queue = FakeReviewQueue()
     results = run(Source(url="https://youtu.be/miss"), _providers(None, queue))
     assert results[0].status == "review"
-    assert len(queue.items) == 1
-    assert queue.items[0].tags is None
-    assert queue.items[0].reason == "no fingerprint match"
+    assert len(queue.items()) == 1
+    assert queue.items()[0].tags is None
+    assert queue.items()[0].reason == "no fingerprint match"
     assert summarize(results).queued == 1
 
 
@@ -103,7 +103,7 @@ def test_a_skipped_download_is_queued_and_the_batch_still_completes():
     )
     assert len(results) == 1  # the clean Track processed; batch not aborted
     assert results[0].tags.verified is True
-    reasons = [item.reason for item in queue.items]
+    reasons = [item.reason for item in queue.items()]
     assert any("cookies" in reason.lower() for reason in reasons)
     assert summarize(results, len(downloader.skipped)).queued == 1
 
@@ -129,7 +129,7 @@ def test_mixed_batch_summary_and_queue_contents():
     summary = summarize(results, len(downloader.skipped))
     assert summary.verified == 1
     assert summary.queued == 2
-    assert len(queue.items) == 2
+    assert len(queue.items()) == 2
 
 
 # --- persistence across process exit -------------------------------------------
@@ -151,6 +151,19 @@ def test_the_queue_persists_across_process_exit(tmp_path):
         "https://youtu.be/two",
     ]
     assert [item.reason for item in reopened] == ["no fingerprint match", "unverified"]
+
+
+def test_replace_all_rewrites_the_queue_with_the_survivors(tmp_path):
+    # The clear pass (#7) rewrites the queue with the entries it did not clear.
+    path = tmp_path / "review-queue.json"
+    queue = JsonReviewQueue(path)
+    queue.enqueue(_review_item("https://youtu.be/one", "reason one"))
+    queue.enqueue(_review_item("https://youtu.be/two", "reason two"))
+
+    queue.replace_all([_review_item("https://youtu.be/two", "reason two")])
+
+    reopened = JsonReviewQueue(path).items()  # a fresh process reads the survivors
+    assert [item.source_url for item in reopened] == ["https://youtu.be/two"]
 
 
 def _review_item(source_url: str, reason: str):
