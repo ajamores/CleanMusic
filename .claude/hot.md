@@ -12,30 +12,34 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Building phase.
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Building phase; the real Fingerprinter/Downloader are still fakes-first, so tuning is against what yt-dlp metadata gives us.
 
 ## Current State (2026-08-20)
 
-- Branch **`main`**, pushed & clean (HEAD `f11f513`, `origin/main` in sync). Untracked: `uv.lock` (deliberately, so far).
-- **#3, #5, #9 shipped and closed** — built in parallel via worktree agents, integrated onto the pipeline seams, two-axis reviewed. **21 tests green.**
-- Engine pipeline is now `download → _album_waterfall (#3) → _confidence_gate (#5) → _write`; #9's format/cookies rode in via constructor injection (no engine/domain change).
-- Review fixes folded into #9: age-marker `"age"`→`"webpage"` substring bug; dead `yt_dlp_codec` wired in.
+- Branch **`main`**, in sync with `origin/main` (HEAD `95c3aeb`). **38 tests green.**
+- **#14 shipped and closed** (PR #15): the Confidence gate no longer stamps a low-confidence, **channel-only** Match `verified`. When the artist agreement rests solely on the uploader (a channel name anyone can set), the Match must clear `_UPLOADER_ONLY_MIN_CONFIDENCE = 0.9` or it's kept unverified → Review queue. A title-corroborated artist is unaffected. Recorded as an ADR-0003 amendment.
+- Pipeline shape: `download → _album_waterfall → _confidence_gate → _write`; `run()` also enqueues reviewables + drains `downloader.skipped`.
 
 ## What's next
 
-- **Wave 2, one ticket per fresh session.** Ready now: **#8** (Playlist + bounded concurrency), **#4** (Resolver / Claude Haiku — unblocked by #3), **#11** (Confidence gate: carry `uploader` on Track, artist-aware check + fallback — refines #5), **#6→#7** (Review queue — follows #5).
-- **Before any worktree fan-out: `git push` the prep commit first** — worktrees branch from the pushed remote, not local HEAD (see `docs/LEARNINGS.md`). Today's stumble.
-- Loop per ticket: `tdd` → two-axis `code-review` → commit → close.
-- Deferred review notes now owned by tickets: skipped-Source Review-queue routing → #6/#7; real Downloader aborts a whole playlist on one bad entry → #8.
+- **Wave 2 continues, one ticket per fresh session.** Ready: **#8** (Playlist + bounded concurrency), **#4** (Resolver / Claude Haiku). **#7** (clear the queue) needs only **#4**.
+- Loop per ticket: `/clear` → `/implement` (drives `/tdd` then `/code-review`) → commit → PR → merge → close. Small already-diagnosed fixes: `/tdd` alone.
+- Before any worktree fan-out: **`git push` the prep commit first** (worktrees branch from pushed remote — `docs/LEARNINGS.md`).
+
+## Open threads
+
+- **Residual gate gap (known, accepted for now):** #14 only closes the *low-confidence* channel-impersonation case. A **confident-wrong** Match on a channel named after the wrong artist still verifies — no test separates a real artist channel from one merely named after the artist. Revisit once the real Fingerprinter lands (its confidence distribution is what sets the bar).
+- **Queue write is O(n²)/batch** — noted in `review_queue.py` docstring; revisit for #8's playlists (JSON Lines appends O(1)).
 
 ## Recent sessions (rolling — last 2–3)
 
-- **2026-08-20 (pm)** — Merged #2 (PR #10). Fanned out #3/#5/#9 as parallel worktree agents; hit the pushed-remote base gotcha (banked as a learning), recovered by grafting each stage onto the widened pipeline seam. Two-axis review caught + fixed the age-substring bug and a dead property; filed #11 from the gate design discussion.
-- **2026-08-20 (am)** — Built #2 skeleton TDD; two-axis review fixes; closed #2.
+- **2026-08-20 (#14)** — Gated the uploader-only verify path on `Match.confidence`. Filed the weakness (surfaced in the #6 review) as an issue first, TDD'd the fix, two-axis review (dedup cleanup + added the missing high-confidence test), ADR-0003 amendment. Merged PR #15.
+- **2026-08-20 (#6)** — Persisted Review queue + summary; all `DownloadError`s route to the queue. Merged PR #13.
+- **2026-08-20 (#11)** — Artist-aware Confidence gate; uploader as second witness. ADR-0003.
 
 ## Where the rest of the context lives
 
-- **Decisions:** `docs/adr/0001` (engine/interface split), `docs/adr/0002` (identification pipeline). **Glossary:** `CONTEXT.md`. **Spec:** issue #1. **Tickets:** #4, #6, #7, #8, #11.
+- **Decisions:** `docs/adr/` — `0001`/`0002`/`0003` (0003 now carries the #14 amendment). **Glossary:** `CONTEXT.md`. **Spec:** issue #1. **Tickets:** #4, #7, #8.
 - **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md`.
 - **Prototype code + verdict tables:** branch `prototype/identify-spike`.
 - **Garden vault** (business/decisions): `/graft` to push, not this board.
