@@ -144,6 +144,126 @@ def test_a_fully_archived_run_yields_no_tracks_without_crashing(tmp_path, monkey
     assert downloader.skipped == []  # not a failure — just nothing new to fetch
 
 
+def test_progress_bar_is_on_and_a_title_hook_is_wired(tmp_path):
+    # #24: a fetch must not be a silent hang. yt-dlp's real progress bar is enabled
+    # (noprogress off) and a progress hook prints each Track's title first.
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+    assert opts["noprogress"] is False
+    assert opts["progress_hooks"]  # a hook is wired to announce the title
+
+
+def test_the_title_hook_announces_each_track_once(tmp_path, capsys):
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    status = {"status": "downloading", "info_dict": {"id": "X", "title": "Song X"}}
+    downloader._announce_download(status)
+    downloader._announce_download(status)  # a second progress tick for the same id
+    downloader._announce_download({"status": "finished", "info_dict": {"id": "X"}})
+    out = capsys.readouterr().out
+    assert out.count("Song X") == 1  # announced once, not on every tick
+
+
+class _ScriptedYoutubeDL:
+    """Fake yt_dlp.YoutubeDL for the archive-skip path (#24).
+
+    ``preflight`` is what ``extract_info(download=False, …)`` returns (yt-dlp's URL
+    classification — a video or a playlist of flat entries), ``download_info`` what
+    the ``download=True`` call returns, and ``archived_ids`` stands in for the
+    download archive: ``in_download_archive`` reports an entry as already-fetched
+    when its id is in that set. So a test can model a re-run (nothing downloaded,
+    every entry archived) apart from an empty/new Source.
+    """
+
+    def __init__(self, preflight=None, download_info=None, archived_ids=None):
+        self._preflight = preflight
+        self._download_info = download_info
+        self._archived_ids = set(archived_ids or ())
+
+    def __call__(self, opts: dict) -> "_ScriptedYoutubeDL":
+        return self
+
+    def __enter__(self) -> "_ScriptedYoutubeDL":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def extract_info(self, url: str, download: bool = True, process: bool = True):
+        return self._download_info if download else self._preflight
+
+    def in_download_archive(self, info: dict) -> bool:
+        return info.get("id") in self._archived_ids
+
+
+def test_an_all_archived_rerun_is_recorded_as_an_archive_skip(tmp_path, monkeypatch):
+    # A re-run: the Source still resolves in the pre-flight, but the download pulls
+    # nothing because its entry is already in the archive. That is an archive skip,
+    # not a failure and not an empty Source (#24).
+    fake = _ScriptedYoutubeDL(
+        preflight={"id": "X", "extractor_key": "Youtube"},  # a video → no refusal
+        download_info=None,  # yt-dlp downloaded nothing (already archived)
+        archived_ids={"X"},  # …because X is in the download archive
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/X"))
+
+    assert tracks == []
+    assert downloader.archive_skips == ["https://youtu.be/X"]
+    assert downloader.skipped == []  # not a failure
+
+
+def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch):
+    # The playlist path: no per-run pre-flight, so the archive check resolves it on
+    # the empty path. Every entry is archived → an archive skip.
+    fake = _ScriptedYoutubeDL(
+        preflight={"_type": "playlist", "entries": [
+            {"id": "a", "ie_key": "Youtube"}, {"id": "b", "ie_key": "Youtube"}]},
+        download_info={"entries": [None, None]},  # both archived → falsy
+        archived_ids={"a", "b"},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    tracks = downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert tracks == []
+    assert downloader.archive_skips == ["https://youtube.com/playlist?list=PL"]
+
+
+def test_a_resolvable_but_unarchived_empty_source_is_not_an_archive_skip(tmp_path, monkeypatch):
+    # The misclassification guard: the Source resolves in the pre-flight but its
+    # entry was never downloaded (not in the archive) and still pulled nothing — a
+    # genuinely empty/unplayable Source, NOT an archived re-run (#24).
+    fake = _ScriptedYoutubeDL(
+        preflight={"id": "NEW", "extractor_key": "Youtube"},
+        download_info=None,
+        archived_ids=set(),  # NEW was never fetched
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/NEW"))
+
+    assert tracks == []
+    assert downloader.archive_skips == []
+    assert downloader.skipped == []
+
+
+def test_an_unresolvable_empty_source_is_not_an_archive_skip(tmp_path, monkeypatch):
+    # A Source that resolves to nothing at all (pre-flight None) is empty, not a
+    # re-run — no archive skip.
+    fake = _ScriptedYoutubeDL(preflight=None, download_info=None, archived_ids=set())
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/gone"))
+
+    assert tracks == []
+    assert downloader.archive_skips == []
+    assert downloader.skipped == []
+
+
 def test_age_restriction_without_cookies_is_still_skipped(tmp_path, monkeypatch):
     # The existing friendly age-restriction path must survive the broadened catch.
     raiser = _RaisingYoutubeDL("ERROR: Sign in to confirm your age")

@@ -24,7 +24,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from muzik.domain import ReviewItem, Tags
+from muzik.domain import Match, MatchConflict, ReviewItem, Tags
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,28 @@ def _to_record(item: ReviewItem) -> dict:
             "album": tags.album,
             "verified": tags.verified,
         },
+        "conflict": _conflict_record(item.conflict),
+    }
+
+
+def _conflict_record(conflict: MatchConflict | None) -> dict | None:
+    """The rejected-Match conflict as a plain dict, or None (#24).
+
+    Only what the Review output renders is kept — the heard Match's title/artist/
+    confidence, the witnesses, and the ``why``. Cover art is dropped, as elsewhere
+    in the queue: the provisional file already holds it.
+    """
+    if conflict is None:
+        return None
+    return {
+        "heard": {
+            "title": conflict.heard.title,
+            "artist": conflict.heard.artist,
+            "confidence": conflict.heard.confidence,
+        },
+        "source_artist": conflict.source_artist,
+        "uploader": conflict.uploader,
+        "why": conflict.why,
     }
 
 
@@ -141,4 +163,23 @@ def _from_record(record: dict) -> ReviewItem:
         tags=tags,
         output_path=Path(output_path) if output_path is not None else None,
         audio_path=Path(audio_path) if audio_path is not None else None,
+        conflict=_conflict_from_record(record.get("conflict")),
+    )
+
+
+def _conflict_from_record(raw: dict | None) -> MatchConflict | None:
+    """Rebuild a MatchConflict from its record, or None (#24)."""
+    if raw is None:
+        return None
+    heard = raw["heard"]
+    return MatchConflict(
+        heard=Match(
+            title=heard["title"],
+            artist=heard["artist"],
+            album="",
+            confidence=heard["confidence"],
+        ),
+        source_artist=raw["source_artist"],
+        uploader=raw["uploader"],
+        why=raw["why"],
     )

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from muzik.domain import (
     Match,
+    MatchConflict,
     ReviewAction,
     ReviewDecision,
     ReviewItem,
@@ -135,7 +136,7 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     if match is None:
         return _review(track, "no fingerprint match")
     tags = _album_waterfall(track, match, providers)
-    tags, reason = _confidence_gate(track, match, tags)
+    tags, reason, conflict = _confidence_gate(track, match, tags)
     output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
@@ -143,6 +144,7 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
         output_path=output_path,
         status="tagged",
         reason=reason,
+        conflict=conflict,
     )
 
 
@@ -159,6 +161,7 @@ def _review_item(result: TrackResult, track: Track) -> ReviewItem:
         tags=result.tags,
         output_path=result.output_path,
         audio_path=track.audio_path,
+        conflict=result.conflict,
     )
 
 
@@ -466,17 +469,26 @@ def _provisional_from_source(source_title: str, fallback_artist: str) -> Tags | 
     return Tags(title=title, artist=artist, album="", verified=False)
 
 
-def _confidence_gate(track: Track, match: Match, tags: Tags) -> tuple[Tags, str | None]:
+def _confidence_gate(
+    track: Track, match: Match, tags: Tags
+) -> tuple[Tags, str | None, MatchConflict | None]:
     """Confirm the Match against the Source title, or fall back to provisional.
 
-    Returns the Tags to write and a Review-queue reason — ``None`` only when the
-    Match is verified. The Match is verified only when the Source corroborates it
-    on **both** its title and its artist (ADR-0002 / #11); title agreement alone
-    accepted a confident-wrong Match whenever the title was a common word.
+    Returns the Tags to write, a Review-queue reason (``None`` only when the Match
+    is verified), and — on a provisional outcome — a ``MatchConflict`` recording
+    the rejected Match and the witnesses it failed against (#24). The Match is
+    verified only when the Source corroborates it on **both** its title and its
+    artist (ADR-0002 / #11); title agreement alone accepted a confident-wrong
+    Match whenever the title was a common word.
+
+    Only what the gate *reports* widened here — the verify/provisional decision is
+    unchanged.
     """
     uploader_artist = _normalise_uploader(track.uploader)
-    title_witness = _identity_tokens(_source_artist(track.source_title))
+    source_artist = _source_artist(track.source_title)
+    title_witness = _identity_tokens(source_artist)
     witness = title_witness | _identity_tokens(uploader_artist)
+    title_agrees = _agrees(match, track.source_title)
     artist_corroborated = _artist_corroborates(match, witness)
     # When the artist agreement rests *solely* on the uploader — the Source's own
     # title does not vouch for it — the channel is the only witness, and a channel
@@ -486,13 +498,48 @@ def _confidence_gate(track: Track, match: Match, tags: Tags) -> tuple[Tags, str 
     confident_enough = (
         not uploader_only or match.confidence >= _UPLOADER_ONLY_MIN_CONFIDENCE
     )
-    if _agrees(match, track.source_title) and artist_corroborated and confident_enough:
-        return replace(tags, verified=True), None
+    if title_agrees and artist_corroborated and confident_enough:
+        return replace(tags, verified=True), None, None
+    conflict = MatchConflict(
+        heard=match,
+        source_artist=source_artist,
+        # The normalised channel — the artist witness the gate actually weighed
+        # ("AdeleVEVO" → "Adele", "… - Topic" → ""). Storing the raw channel could
+        # show a "video/channel says:" witness the ``why`` line calls absent.
+        uploader=uploader_artist,
+        why=_conflict_why(source_artist, uploader_artist, title_agrees, artist_corroborated),
+    )
     provisional = _provisional_from_source(track.source_title, uploader_artist)
     if provisional is not None:
-        return provisional, "unverified: provisional Tags from the Source, Match not corroborated"
+        return (
+            provisional,
+            "unverified: provisional Tags from the Source, Match not corroborated",
+            conflict,
+        )
     # No signal either way: keep the Match, but never stamp it verified.
-    return replace(tags, verified=False), "unverified: no second witness to confirm the Match"
+    return (
+        replace(tags, verified=False),
+        "unverified: no second witness to confirm the Match",
+        conflict,
+    )
+
+
+def _conflict_why(
+    source_artist: str, uploader_artist: str, title_agrees: bool, artist_corroborated: bool
+) -> str:
+    """A short line naming which witness failed the gate (#24).
+
+    Reads off the same checks the gate decided on: a title the Source doesn't echo,
+    an artist it contradicts, an absent artist witness, or (the remaining case) a
+    channel-only witness the fingerprint wasn't confident enough to trust.
+    """
+    if not title_agrees:
+        return "title didn't match, kept provisional"
+    if not artist_corroborated:
+        if not source_artist and not uploader_artist:
+            return "no artist witness to confirm it, kept provisional"
+        return "artist didn't match, kept provisional"
+    return "only the channel backs the artist and the Match is uncertain, kept provisional"
 
 
 def _write(track: Track, tags: Tags, providers: Providers) -> Path:

@@ -8,7 +8,7 @@ the next batch's read: a partial final line is tolerated, not fatal.
 
 from pathlib import Path
 
-from muzik.domain import ReviewItem, Tags
+from muzik.domain import Match, MatchConflict, ReviewItem, Tags
 from muzik.real.review_queue import JsonReviewQueue
 
 
@@ -97,6 +97,34 @@ def test_round_trips_full_item_fields(tmp_path):
     assert got.tags == item.tags
     assert got.output_path == item.output_path
     assert got.audio_path == item.audio_path
+
+
+def test_round_trips_the_match_conflict(tmp_path):
+    # #24: the rejected-Match conflict must survive to a later ``--review`` run, so
+    # the clear pass shows the same explanation the batch did.
+    path = tmp_path / "review-queue.jsonl"
+    item = ReviewItem(
+        source_url="https://youtu.be/c",
+        reason="unverified: provisional Tags from the Source, Match not corroborated",
+        tags=Tags(title="Drift Away", artist="Ab-Soul", album="", verified=False),
+        conflict=MatchConflict(
+            heard=Match(title="Drift Away", artist="Dobie Gray", album="", confidence=0.62),
+            source_artist="Ab-Soul",
+            uploader="Top Dawg Entertainment",
+            why="artist didn't match, kept provisional",
+        ),
+    )
+    JsonReviewQueue(path).enqueue(item)
+
+    got = JsonReviewQueue(path).items()[0]
+    assert got.conflict == item.conflict
+
+
+def test_a_conflictless_item_round_trips_with_no_conflict(tmp_path):
+    # A queue entry without a conflict (e.g. no fingerprint match) reloads as None.
+    path = tmp_path / "review-queue.jsonl"
+    JsonReviewQueue(path).enqueue(_item("https://youtu.be/plain"))
+    assert JsonReviewQueue(path).items()[0].conflict is None
 
 
 def test_replace_all_rewrites_as_jsonl_survivors(tmp_path):

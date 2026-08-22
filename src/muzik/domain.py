@@ -56,6 +56,30 @@ class Tags:
 
 
 @dataclass(frozen=True)
+class MatchConflict:
+    """Why the Confidence gate kept a Track provisional (#24).
+
+    What the fingerprint *heard*, set against the Source witnesses it failed to
+    corroborate against — so the Review output can show the conflict, not just a
+    terse reason. Carries only what that output renders: the rejected Match's
+    identity and confidence, the Source's own witnesses (its title's artist half
+    and the uploader/channel), and a short ``why`` naming which witness failed. A
+    reporting record only — it never changes the gate's verify/provisional
+    decision.
+    """
+
+    heard: Match
+    #: The "Artist" half of the Source's own title, or "" when it names none.
+    source_artist: str
+    #: The channel as the gate weighed it — the normalised uploader ("… - Topic" /
+    #: "VEVO" dressing stripped), or "" when it carries no artist. The gate's other
+    #: artist witness.
+    uploader: str
+    #: A short line: which witness failed, and that the Track was kept provisional.
+    why: str
+
+
+@dataclass(frozen=True)
 class TrackResult:
     """The engine's per-Track outcome: what was written, and where."""
 
@@ -67,6 +91,9 @@ class TrackResult:
     #: Why a Track is in the Review queue; None only for a verified, confirmed Track.
     #: A provisionally-written Track ("tagged" but unverified) still carries a reason.
     reason: str | None = None
+    #: The rejected-Match conflict when the gate kept the Track provisional (#24);
+    #: None for a verified Track or one that never got a Match to reject.
+    conflict: MatchConflict | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +116,9 @@ class ReviewItem:
     tags: Tags | None = None
     output_path: Path | None = None
     audio_path: Path | None = None
+    #: The rejected-Match conflict, carried through so the ``--review`` clear pass
+    #: renders the same explanation the batch did (#24). None when there is none.
+    conflict: MatchConflict | None = None
 
 
 @dataclass(frozen=True)
