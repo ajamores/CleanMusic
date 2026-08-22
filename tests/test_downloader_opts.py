@@ -165,12 +165,13 @@ def test_the_title_hook_announces_each_track_once(tmp_path, capsys):
 class _ScriptedYoutubeDL:
     """Fake yt_dlp.YoutubeDL for the archive-skip path (#24).
 
-    ``preflight`` is what ``extract_info(download=False, …)`` returns (yt-dlp's URL
-    classification — a video or a playlist of flat entries), ``download_info`` what
-    the ``download=True`` call returns, and ``archived_ids`` stands in for the
-    download archive: ``in_download_archive`` reports an entry as already-fetched
-    when its id is in that set. So a test can model a re-run (nothing downloaded,
-    every entry archived) apart from an empty/new Source.
+    ``preflight`` is what any ``extract_info(download=False, …)`` returns — serving
+    both the bare-playlist type check and the archive-free resolve in
+    ``_all_archived`` (yt-dlp's URL classification: a video, or a playlist of flat
+    entries). ``download_info`` is the ``download=True`` return, and ``archived_ids``
+    stands in for the download archive — ``in_download_archive`` reports an entry as
+    already-fetched when its id is in that set. So a test models a re-run (nothing
+    downloaded, every entry archived) apart from an empty or new Source.
     """
 
     def __init__(self, preflight=None, download_info=None, archived_ids=None):

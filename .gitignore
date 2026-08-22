@@ -12,6 +12,7 @@ dist/
 
 # Runtime output
 /downloads/
+/retest/
 
 # Prototype — throwaway code lives on branch prototype/identify-spike, not main
 /prototype/
