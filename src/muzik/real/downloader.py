@@ -38,17 +38,16 @@ def _is_age_restriction(error: Exception) -> bool:
     return any(marker in message for marker in _AGE_MARKERS)
 
 
-def _is_bare_playlist(ydl: "yt_dlp.YoutubeDL", url: str) -> bool:
-    """yt-dlp's own verdict on whether ``url`` is a bare playlist (ADR-0004).
+def _is_bare_playlist(preflight: dict | None) -> bool:
+    """yt-dlp's own verdict on whether a pre-flight ``info`` is a bare playlist.
 
-    A lightweight pre-flight: ``process=False`` resolves the URL's type but pulls
-    no tracks. With ``noplaylist`` set (single mode) a ``watch?v=…&list=…`` link
-    resolves to its single video, so only a bare playlist URL classifies as
-    ``playlist``. The verdict is yt-dlp's, never a Muzik URL regex — the address
-    formats are yt-dlp's to understand.
+    Read off a lightweight ``process=False`` pre-flight, which resolves the URL's
+    type but pulls no Track (ADR-0004). With ``noplaylist`` set (single mode) a
+    ``watch?v=…&list=…`` link resolves to its single video, so only a bare playlist
+    URL classifies as ``playlist``. The verdict is yt-dlp's, never a Muzik URL
+    regex — the address formats are yt-dlp's to understand.
     """
-    info = ydl.extract_info(url, download=False, process=False)
-    return bool(info) and info.get("_type") == "playlist"
+    return bool(preflight) and preflight.get("_type") == "playlist"
 
 
 def _track_from_entry(
@@ -86,6 +85,31 @@ class YtDlpDownloader:
         self._expand_playlist = expand_playlist
         #: ``(title_or_url, reason)`` for every Source skipped this batch.
         self.skipped: list[tuple[str, str]] = []
+        #: Source URLs that yielded no Track because every entry was already in the
+        #: download archive — a re-run with nothing new (#24). Distinct from
+        #: ``skipped`` (a failure routed to Review); this is not enqueued anywhere,
+        #: only reported so the CLI can say "already downloaded" instead of a bare
+        #: ``0 verified, 0 queued``.
+        self.archive_skips: list[str] = []
+        #: Video ids already announced this batch, so the progress hook prints each
+        #: Track's title once (#24).
+        self._announced: set[str] = set()
+
+    def _announce_download(self, status: dict) -> None:
+        """yt-dlp progress hook: print each Track's resolved title once, so a fetch
+        opens with the YouTube title before yt-dlp's own ``[download] …%`` bar."""
+        if status.get("status") != "downloading":
+            return
+        info = status.get("info_dict") or {}
+        video_id = info.get("id")
+        # Guard a missing id: a lone id-less entry (None) must not poison the dedup
+        # set and mute every later id-less title. Dedup only on a real id; an entry
+        # without one is simply announced.
+        if video_id is not None and video_id in self._announced:
+            return
+        if video_id is not None:
+            self._announced.add(video_id)
+        print(info.get("title") or video_id or "downloading…")
 
     def _build_opts(self) -> dict:
         codec = self._output_format.yt_dlp_codec
@@ -106,8 +130,13 @@ class YtDlpDownloader:
             "format": fmt,
             "outtmpl": str(self._out_dir / "%(id)s.%(ext)s"),
             "postprocessors": [extract],
+            # Chatty by default (#24): suppress yt-dlp's verbose extraction log
+            # (``quiet``) but keep its real progress bar (``noprogress`` off), so a
+            # large fetch shows ``[download] …%`` rather than hanging silently. The
+            # hook prints the resolved title first.
             "quiet": True,
-            "noprogress": True,
+            "noprogress": False,
+            "progress_hooks": [self._announce_download],
             # Single by default (ADR-0004): yt-dlp drops an attached ``list=`` when
             # the URL also names a video, so no Muzik-side URL parsing. ``--playlist``
             # flips this to expand the list.
@@ -124,16 +153,31 @@ class YtDlpDownloader:
 
     def download(self, source: Source) -> list[Track]:
         self._out_dir.mkdir(parents=True, exist_ok=True)
+        self._announced.clear()  # fresh per Source, so each title announces once
         try:
             with yt_dlp.YoutubeDL(self._build_opts()) as ydl:
-                if not self._expand_playlist and _is_bare_playlist(ydl, source.url):
-                    # Refuse a bare playlist in single mode *before* downloading —
-                    # it has no video to collapse to, so it would expand fully
-                    # (ADR-0004). A whole-Source rejection, not a per-Track skip.
+                # Single mode pre-flights to refuse a bare playlist *before*
+                # downloading — it has no video to collapse to, so it would expand
+                # fully (ADR-0004). The same pre-flight also tells an archived re-run
+                # from an empty Source below, so it is captured, not thrown away.
+                preflight = (
+                    None
+                    if self._expand_playlist
+                    else ydl.extract_info(source.url, download=False, process=False)
+                )
+                if _is_bare_playlist(preflight):
+                    # A whole-Source rejection, not a per-Track skip.
                     raise PlaylistInSingleModeError(
                         "that's a playlist; pass --playlist to download all of it"
                     )
                 info = ydl.extract_info(source.url, download=True)
+                tracks = self._tracks_from_info(info, source.url)
+                if not tracks and self._all_archived(ydl, source.url, preflight):
+                    # Every entry was already in the archive (a re-run, #8), not an
+                    # empty/unplayable Source (#24). Record it so the CLI can say so
+                    # rather than emitting a silent, bare 0/0 summary.
+                    self.archive_skips.append(source.url)
+                return tracks
         except DownloadError as error:
             # Any download failure — age wall, private/deleted video, network —
             # routes the Source to the Review queue and lets the batch go on
@@ -147,16 +191,41 @@ class YtDlpDownloader:
             self.skipped.append((source.url, reason))
             return []
 
-        if info is None:
-            # yt-dlp returns None when it downloaded nothing — every entry was
-            # already in the download archive (a re-run, #8), or the Source held
-            # no playable video. Not a failure: there are simply no new Tracks.
-            return []
-
+    def _tracks_from_info(self, info: dict | None, url_fallback: str) -> list[Track]:
+        """Map a yt-dlp result to Tracks. None / all-falsy entries → no Tracks:
+        yt-dlp downloaded nothing (a re-run, or an unplayable Source)."""
         suffix = self._output_format.file_suffix
-        entries = info.get("entries") if "entries" in info else [info]
+        if info is None:
+            entries: list = []
+        elif "entries" in info:
+            entries = list(info["entries"] or [])
+        else:
+            entries = [info]
         return [
-            _track_from_entry(entry, self._out_dir, suffix, source.url)
+            _track_from_entry(entry, self._out_dir, suffix, url_fallback)
             for entry in entries
             if entry
         ]
+
+    def _all_archived(
+        self, ydl: "yt_dlp.YoutubeDL", url: str, preflight: dict | None
+    ) -> bool:
+        """True when the Source resolves to entries that are ALL already in the
+        download archive — a re-run with nothing new, as opposed to an empty Source.
+
+        Consults the archive yt-dlp already maintains (``in_download_archive``)
+        rather than a second live extraction: a re-run's entries resolve in the
+        pre-flight yet sit in the archive, an empty Source resolves to no entries,
+        and an unplayable-but-*new* Source resolves to entries that are not archived
+        — so only a genuine re-run reports here. In playlist mode the pre-flight was
+        skipped above, so it is resolved now — on this rare empty path only.
+        """
+        if preflight is None:
+            preflight = ydl.extract_info(url, download=False, process=False)
+        if not preflight:
+            return False
+        if preflight.get("_type") == "playlist":
+            entries = [entry for entry in (preflight.get("entries") or []) if entry]
+        else:
+            entries = [preflight]
+        return bool(entries) and all(ydl.in_download_archive(entry) for entry in entries)

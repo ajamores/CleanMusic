@@ -5,7 +5,7 @@ prompts through a stubbed ``input``.
 """
 
 import muzik.cli as cli
-from muzik.domain import Match
+from muzik.domain import Match, MatchConflict, ReviewItem, Tags
 from muzik.fakes import FakeReviewQueue, FakeTagWriter
 from review_support import provisional_item, review_providers
 
@@ -68,6 +68,32 @@ def test_hint_at_the_prompt_reidentifies(monkeypatch):
 
     assert writer.written[0][1].verified is True
     assert queue.items() == []
+
+
+def test_review_listing_shows_the_conflict_for_a_queued_entry(monkeypatch, capsys):
+    # #24: the same rejected-Match conflict the batch showed must appear in the
+    # ``--review`` listing, so a later clear pass can tell a wrongly-rejected Match
+    # from a correctly-caught one.
+    item = ReviewItem(
+        source_url="https://youtu.be/x",
+        reason="unverified: provisional Tags from the Source, Match not corroborated",
+        tags=Tags(title="Drift Away", artist="Ab-Soul", album="", verified=False),
+        conflict=MatchConflict(
+            heard=Match(title="Drift Away", artist="Dobie Gray", album="", confidence=0.62),
+            source_artist="Ab-Soul",
+            uploader="Top Dawg Entertainment",
+            why="artist didn't match, kept provisional",
+        ),
+    )
+    queue = FakeReviewQueue(items=[item])
+    monkeypatch.setattr("builtins.input", _scripted_input(["s"]))  # skip, leave queued
+
+    cli._run_review(review_providers(queue, FakeTagWriter()))
+
+    out = capsys.readouterr().out
+    assert 'fingerprint: "Drift Away" by Dobie Gray (0.62)' in out
+    assert "video/channel says: Ab-Soul / Top Dawg Entertainment" in out
+    assert "→ artist didn't match, kept provisional" in out
 
 
 def test_skip_at_the_prompt_keeps_the_entry(monkeypatch):

@@ -328,6 +328,49 @@ def test_confidence_gate_verifies_a_high_confidence_match_backed_by_the_channel_
     assert result.tags.title == "Hello"
 
 
+def test_a_provisional_track_carries_the_rejected_match_conflict():
+    # #24: a gate failure must surface *why*. The fingerprint heard a different
+    # artist for a common title; the gate correctly kept it provisional, and the
+    # result now carries the rejected Match and the Source witnesses it conflicted
+    # with, so the output can show the conflict rather than a lone terse reason.
+    match = Match(title="Drift Away", artist="Dobie Gray", album="Drift Away", confidence=0.62)
+    writer = FakeTagWriter()
+    results = run(
+        Source(url="https://youtu.be/x"),
+        _providers(
+            match,
+            writer,
+            source_title="Ab-Soul - Drift Away",
+            uploader="Top Dawg Entertainment",
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is False
+    conflict = result.conflict
+    assert conflict is not None
+    # What the fingerprint heard — identity + confidence.
+    assert conflict.heard.title == "Drift Away"
+    assert conflict.heard.artist == "Dobie Gray"
+    assert conflict.heard.confidence == 0.62
+    # The Source witnesses it conflicted with.
+    assert conflict.source_artist == "Ab-Soul"
+    assert conflict.uploader == "Top Dawg Entertainment"
+    assert "artist" in conflict.why
+
+
+def test_a_verified_track_carries_no_conflict():
+    # The gate confirmed the Match, so there is nothing to explain.
+    match = Match(title="Envy", artist="Ogi", album="Monologues", confidence=0.99)
+    writer = FakeTagWriter()
+    results = run(
+        Source(url="https://youtu.be/abc"),
+        _providers(match, writer, source_title="Ogi - Envy (Official Video)"),
+    )
+
+    assert results[0].conflict is None
+
+
 def test_no_match_routes_to_the_review_queue():
     writer = FakeTagWriter()
     results = run(Source(url="https://youtu.be/xyz"), _providers(None, writer))
@@ -338,5 +381,8 @@ def test_no_match_routes_to_the_review_queue():
     assert result.output_path is None
     assert result.status == "review"
     assert result.reason == "no fingerprint match"
+    # No Match was heard, so there is no rejected-Match conflict to show (#24) —
+    # the plain reason stands on its own.
+    assert result.conflict is None
     # Nothing was written for an unidentified Track.
     assert writer.written == []

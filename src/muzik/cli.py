@@ -8,7 +8,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
+from muzik.domain import (
+    Match,
+    MatchConflict,
+    ReviewDecision,
+    ReviewItem,
+    Source,
+    Tags,
+    Track,
+)
 from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
 from muzik.providers import PlaylistInSingleModeError, Resolver
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
@@ -95,6 +103,25 @@ def _describe(item: ReviewItem) -> str:
     return item.source_url
 
 
+def _conflict_lines(conflict: MatchConflict | None, indent: str = "  ") -> list[str]:
+    """The rejected-Match conflict as indented lines, or none (#24).
+
+    Shows what the fingerprint heard, the Source witnesses it conflicted with, and
+    a short why — so a wrongly-rejected Match is told apart from a correctly-caught
+    one, instead of a lone terse reason.
+    """
+    if conflict is None:
+        return []
+    heard = conflict.heard
+    by = f" by {heard.artist}" if heard.artist else ""
+    lines = [f'{indent}fingerprint: "{heard.title}"{by} ({heard.confidence:.2f})']
+    witnesses = " / ".join(w for w in (conflict.source_artist, conflict.uploader) if w)
+    if witnesses:
+        lines.append(f"{indent}video/channel says: {witnesses}")
+    lines.append(f"{indent}→ {conflict.why}")
+    return lines
+
+
 class _StdinReviewPrompter:
     """Asks the user, over stdin, what to do with each Review-queue entry (#7).
 
@@ -158,7 +185,14 @@ def _run_review(providers: Providers) -> int:
         return 0
     print(f"Review queue ({len(entries)}):")
     for item in entries:
-        print(f"  {_describe(item)}  ({item.reason})")
+        # Reason OR conflict, never both (as in the batch output): a structured
+        # conflict already explains why, so the terse reason would only repeat it.
+        if item.conflict is not None:
+            print(f"  {_describe(item)}")
+            for line in _conflict_lines(item.conflict, indent="    "):
+                print(line)
+        else:
+            print(f"  {_describe(item)}  ({item.reason})")
     outcomes = clear_review_queue(providers, _StdinReviewPrompter())
     print()
     for outcome in outcomes:
@@ -223,16 +257,35 @@ def main() -> int:
             print(f"tagged  {result.tags.artist} — {result.tags.title} [{result.tags.album}]")
             print(f"        {result.output_path}")
         else:
-            print(f"review  {result.source_url} ({result.reason})")
+            identity = (
+                f"{result.tags.artist} — {result.tags.title}"
+                if result.tags is not None
+                else result.source_url
+            )
+            print(f"review  {identity}")
+            # Show the conflict — what the fingerprint heard vs what the Source says
+            # — when the gate kept the Track provisional (#24). A bare reason (e.g.
+            # no fingerprint match) has no conflict; print it instead.
+            conflict_lines = _conflict_lines(result.conflict)
+            if conflict_lines:
+                for line in conflict_lines:
+                    print(line)
+            elif result.reason is not None:
+                print(f"  {result.reason}")
             # A gate failure still writes provisional Tags to a real file; tell the
             # user where it landed so they can find it during review.
             if result.output_path is not None:
-                print(f"        {result.output_path} (provisional)")
+                print(f"  file: {result.output_path} (provisional)")
 
     # Sources the Downloader skipped (e.g. age-restricted without --cookies) did not
     # reach the engine, but were enqueued by run(); print their reason too.
     for source_url, reason in downloader.skipped:
         print(f"review  {source_url} ({reason})")
+
+    # A re-run where every entry was already fetched pulls no Track (#24). Say so
+    # explicitly, so an all-archived Source reads as "done", not a silent failure.
+    for source_url in downloader.archive_skips:
+        print(f"already downloaded — nothing new for {source_url}")
 
     summary = summarize(results, len(downloader.skipped))
     print(f"\n{summary.verified} verified, {summary.queued} queued for review")
