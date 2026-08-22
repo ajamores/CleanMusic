@@ -6,6 +6,7 @@
   Rust build fails from source. `yt-dlp` prints a deprecation warning on 3.10 but works;
   3.11 avoids the warning.
 - **ffmpeg** on `PATH` — used to extract audio and to down-convert clips for fingerprinting.
+- **A JavaScript runtime** on `PATH` — [deno](https://deno.land) (`curl -fsSL https://deno.land/install.sh | sh`) is yt-dlp's recommended one. yt-dlp now needs it for YouTube extraction; without it it falls back to a deprecated path that pulls degraded audio, which weakens the fingerprint and sends tracks to review that should verify (`docs/LEARNINGS.md`).
 - **`uv`** for environment and dependency management.
 
 ## Setup
