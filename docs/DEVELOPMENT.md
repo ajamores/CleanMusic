@@ -28,6 +28,24 @@ skeleton's happy path and the whole test suite run without it.
 All tests run offline. The two real-I/O tests (`test_tagwriter.py`,
 `test_engine_integration.py`) need `ffmpeg` and skip if it is absent.
 
+### Smoke test (real yt-dlp)
+
+An **opt-in** integration test drives the real pipeline against real yt-dlp on the
+critical paths #24 touched — a fresh download, an archived re-run, and `--playlist`
+expansion — because the offline suite fakes the yt-dlp seam and a fake can't
+disprove a wrong assumption about the tool (this is how #28/#29 shipped). It is a
+pre-merge check, not a CI gate.
+
+```bash
+.venv/bin/pytest -m smoke
+```
+
+It is **deselected by default** (`pytest` alone never runs it) and needs the network
+plus a full download toolchain — `yt-dlp`, `ffmpeg`, and **deno** (the JS runtime;
+see Requirements above). Missing any of those, each case **skips** rather than
+fails. The fixture video/playlist ids are pinned at the top of
+`tests/test_smoke_yt_dlp.py`; if one is taken down, repoint that one constant.
+
 ## Running the CLI
 
 ```bash
