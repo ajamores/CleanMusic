@@ -27,3 +27,10 @@ packages = ["src/muzik"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The default suite is offline (docs/DEVELOPMENT.md). The `smoke` tests hit real
+# yt-dlp + network and are deselected here; `pytest -m smoke` re-selects them (a
+# command-line -m overrides this one). See tests/test_smoke_yt_dlp.py.
+addopts = ["-m", "not smoke"]
+markers = [
+    "smoke: opt-in integration test against real yt-dlp/network (#30). Deselected by default; run with `pytest -m smoke`. Skips (never fails) when network / yt-dlp / ffmpeg / a JS runtime is unavailable.",
+]
