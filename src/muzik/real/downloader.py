@@ -206,35 +206,53 @@ class YtDlpDownloader:
         ]
 
     def _all_archived(self, url: str) -> bool:
-        """True when the Source resolves to entries that are ALL already in the
+        """True when the Source resolves to video ids that are ALL already in the
         download archive — a re-run with nothing new, as opposed to an empty Source.
 
-        Only reached when a download pulled nothing. Two steps, because yt-dlp
-        cannot do both at once: a ``download_archive`` in the opts makes it filter an
-        archived entry out during extraction (returning ``None``), hiding the very
-        ids we need. So resolve the Source *archive-free* (flat, so a playlist isn't
-        re-extracted in full) to see its true entries, then check each against the
-        archive the batch maintains. An empty Source resolves to no entries; an
-        unplayable-but-*new* Source to entries that are not in the archive — so only
-        a genuine re-run reports here. One resolution, on this rare empty path only.
+        Only reached when a download pulled nothing. Resolve the Source's ids first,
+        then match them against the archive the batch maintains. An empty Source
+        resolves to no ids; an unplayable-but-*new* Source to ids that are not in the
+        archive — so only a genuine re-run reports here.
+
+        Matching is by **video id**, not yt-dlp's own ``in_download_archive``: a URL
+        that carries a ``list=`` classifies the entry under the ``YoutubeTab``
+        extractor, while the download recorded it under ``Youtube`` — so the two
+        archive keys disagree and the API check misses. The video id is the same
+        either way, and it is what "already fetched" really means.
         """
-        resolve_opts: dict = {
+        ids = self._resolve_entry_ids(url)
+        if not ids:
+            return False
+        archived = self._archived_ids()
+        return all(video_id in archived for video_id in ids)
+
+    def _resolve_entry_ids(self, url: str) -> list[str]:
+        """The Source's video ids, resolved *archive-free* so an already-fetched
+        entry still appears (a ``download_archive`` in the opts makes yt-dlp filter
+        it out during extraction, returning ``None``). Flat, so a playlist isn't
+        re-extracted in full. Empty on a Source that no longer resolves."""
+        opts: dict = {
             "quiet": True,
             "extract_flat": "in_playlist",
             "noplaylist": not self._expand_playlist,
         }
         if self._cookies is not None:
-            resolve_opts["cookiefile"] = str(self._cookies)
+            opts["cookiefile"] = str(self._cookies)
         try:
-            with yt_dlp.YoutubeDL(resolve_opts) as ydl:
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False, process=False)
         except DownloadError:
-            return False  # the Source no longer resolves — treat as empty, not a re-run
+            return []  # the Source no longer resolves — treat as empty, not a re-run
         if not info:
-            return False
+            return []
         entries = info["entries"] if "entries" in info else [info]
-        entries = [entry for entry in entries if entry]
-        if not entries:
-            return False
-        with yt_dlp.YoutubeDL({"quiet": True, "download_archive": str(self._archive_path)}) as archive:
-            return all(archive.in_download_archive(entry) for entry in entries)
+        return [entry["id"] for entry in entries if entry and entry.get("id")]
+
+    def _archived_ids(self) -> set[str]:
+        """The video ids already in the download archive. Its lines are
+        ``<extractor> <id>`` (#8); the id is the last field, extractor aside."""
+        try:
+            text = self._archive_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return set()
+        return {line.split()[-1] for line in text.splitlines() if line.strip()}

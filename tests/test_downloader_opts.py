@@ -162,22 +162,28 @@ def test_the_title_hook_announces_each_track_once(tmp_path, capsys):
     assert out.count("Song X") == 1  # announced once, not on every tick
 
 
+def _write_archive(tmp_path, *video_ids: str) -> None:
+    """Write a download archive in the out dir, in yt-dlp's ``<extractor> <id>``
+    line format (#8) — the file the archive-skip check reads (#24)."""
+    (tmp_path / ".download-archive.txt").write_text(
+        "".join(f"youtube {video_id}\n" for video_id in video_ids), encoding="utf-8"
+    )
+
+
 class _ScriptedYoutubeDL:
     """Fake yt_dlp.YoutubeDL for the archive-skip path (#24).
 
     ``preflight`` is what any ``extract_info(download=False, …)`` returns — serving
     both the bare-playlist type check and the archive-free resolve in
     ``_all_archived`` (yt-dlp's URL classification: a video, or a playlist of flat
-    entries). ``download_info`` is the ``download=True`` return, and ``archived_ids``
-    stands in for the download archive — ``in_download_archive`` reports an entry as
-    already-fetched when its id is in that set. So a test models a re-run (nothing
-    downloaded, every entry archived) apart from an empty or new Source.
+    entries). ``download_info`` is the ``download=True`` return. Which ids count as
+    already-fetched is set by the on-disk archive (``_write_archive``), matching the
+    real code, which matches by video id read from that file.
     """
 
-    def __init__(self, preflight=None, download_info=None, archived_ids=None):
+    def __init__(self, preflight=None, download_info=None):
         self._preflight = preflight
         self._download_info = download_info
-        self._archived_ids = set(archived_ids or ())
 
     def __call__(self, opts: dict) -> "_ScriptedYoutubeDL":
         return self
@@ -191,18 +197,15 @@ class _ScriptedYoutubeDL:
     def extract_info(self, url: str, download: bool = True, process: bool = True):
         return self._download_info if download else self._preflight
 
-    def in_download_archive(self, info: dict) -> bool:
-        return info.get("id") in self._archived_ids
-
 
 def test_an_all_archived_rerun_is_recorded_as_an_archive_skip(tmp_path, monkeypatch):
-    # A re-run: the Source still resolves in the pre-flight, but the download pulls
-    # nothing because its entry is already in the archive. That is an archive skip,
-    # not a failure and not an empty Source (#24).
+    # A re-run: the Source still resolves, but the download pulls nothing because its
+    # id is already in the archive. That is an archive skip, not a failure and not an
+    # empty Source (#24).
+    _write_archive(tmp_path, "X")
     fake = _ScriptedYoutubeDL(
         preflight={"id": "X", "extractor_key": "Youtube"},  # a video → no refusal
         download_info=None,  # yt-dlp downloaded nothing (already archived)
-        archived_ids={"X"},  # …because X is in the download archive
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -214,14 +217,32 @@ def test_an_all_archived_rerun_is_recorded_as_an_archive_skip(tmp_path, monkeypa
     assert downloader.skipped == []  # not a failure
 
 
-def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch):
-    # The playlist path: no per-run pre-flight, so the archive check resolves it on
-    # the empty path. Every entry is archived → an archive skip.
+def test_archive_skip_matches_by_id_across_a_tab_extractor(tmp_path, monkeypatch):
+    # A URL that carries a list= resolves the entry under the YoutubeTab extractor,
+    # while the download recorded it under Youtube. Matching by id (not yt-dlp's
+    # extractor-keyed archive check) still recognises the re-run (#24 regression).
+    _write_archive(tmp_path, "aD9KtVc6svw")  # recorded as "youtube aD9KtVc6svw"
     fake = _ScriptedYoutubeDL(
-        preflight={"_type": "playlist", "entries": [
-            {"id": "a", "ie_key": "Youtube"}, {"id": "b", "ie_key": "Youtube"}]},
+        preflight={"id": "aD9KtVc6svw", "extractor_key": "YoutubeTab", "ie_key": "Youtube"},
+        download_info=None,
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    url = "https://www.youtube.com/watch?v=aD9KtVc6svw&list=LL&index=1"
+    tracks = downloader.download(Source(url=url))
+
+    assert tracks == []
+    assert downloader.archive_skips == [url]
+
+
+def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch):
+    # The playlist path: the archive check resolves the list on the empty path.
+    # Every entry's id is archived → an archive skip.
+    _write_archive(tmp_path, "a", "b")
+    fake = _ScriptedYoutubeDL(
+        preflight={"_type": "playlist", "entries": [{"id": "a"}, {"id": "b"}]},
         download_info={"entries": [None, None]},  # both archived → falsy
-        archived_ids={"a", "b"},
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -233,13 +254,11 @@ def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch
 
 
 def test_a_resolvable_but_unarchived_empty_source_is_not_an_archive_skip(tmp_path, monkeypatch):
-    # The misclassification guard: the Source resolves in the pre-flight but its
-    # entry was never downloaded (not in the archive) and still pulled nothing — a
-    # genuinely empty/unplayable Source, NOT an archived re-run (#24).
+    # The misclassification guard: the Source resolves but its id was never
+    # downloaded (not in the archive) and still pulled nothing — a genuinely empty/
+    # unplayable Source, NOT an archived re-run (#24). No archive file written.
     fake = _ScriptedYoutubeDL(
-        preflight={"id": "NEW", "extractor_key": "Youtube"},
-        download_info=None,
-        archived_ids=set(),  # NEW was never fetched
+        preflight={"id": "NEW", "extractor_key": "Youtube"}, download_info=None
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -252,9 +271,9 @@ def test_a_resolvable_but_unarchived_empty_source_is_not_an_archive_skip(tmp_pat
 
 
 def test_an_unresolvable_empty_source_is_not_an_archive_skip(tmp_path, monkeypatch):
-    # A Source that resolves to nothing at all (pre-flight None) is empty, not a
-    # re-run — no archive skip.
-    fake = _ScriptedYoutubeDL(preflight=None, download_info=None, archived_ids=set())
+    # A Source that resolves to nothing at all is empty, not a re-run — no skip.
+    _write_archive(tmp_path, "something-else")  # archive non-empty, but nothing resolves
+    fake = _ScriptedYoutubeDL(preflight=None, download_info=None)
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
     downloader = YtDlpDownloader(out_dir=tmp_path)
