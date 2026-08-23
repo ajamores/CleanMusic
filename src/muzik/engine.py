@@ -425,6 +425,16 @@ _NOISE_TOKENS = frozenset(
     }
 )
 
+#: Grammatical stopwords that never distinguish one recording from another. Dropped
+#: alongside the noise words so a lone "The"/"is"/"and" difference between the
+#: fingerprint's title and the Source's doesn't sink title agreement (#41) — e.g.
+#: fingerprint "The Vibes Is Right" vs Source "Vibes Is Right". Kept deliberately
+#: small: only words with no identifying power, so real titles aren't hollowed out.
+_STOPWORDS = frozenset({"the", "a", "an", "and", "of", "is"})
+
+#: Everything the identity tokeniser strips: boilerplate and grammatical filler.
+_NON_IDENTITY_TOKENS = _NOISE_TOKENS | _STOPWORDS
+
 #: Bracketed asides — "(Official Video)", "[Audio]" — stripped before parsing.
 _BRACKETS_RE = re.compile(r"[\(\[\{].*?[\)\]\}]")
 
@@ -443,7 +453,7 @@ def _clean(text: str) -> str:
 def _identity_tokens(text: str) -> set[str]:
     """Lower-cased, noise-free word set — the identity a title carries."""
     words = re.findall(r"[0-9a-z]+", _clean(text).lower())
-    return {w for w in words if w not in _NOISE_TOKENS}
+    return {w for w in words if w not in _NON_IDENTITY_TOKENS}
 
 
 def _agrees(match: Match, source_title: str) -> bool:

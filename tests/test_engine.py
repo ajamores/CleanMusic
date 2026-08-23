@@ -404,6 +404,35 @@ def test_a_verified_track_carries_no_conflict():
     assert results[0].conflict is None
 
 
+def test_confidence_gate_ignores_stopwords_in_title_agreement():
+    # #41: a lone grammatical stopword ("The") present in the fingerprint's title
+    # but not the Source's must not sink title agreement. Observed live: fingerprint
+    # "The Vibes Is Right" vs video "Vibes Is Right" was dropped to Review over the
+    # single word "The". With stopwords ignored it corroborates on the fast path.
+    match = Match(
+        title="The Vibes Is Right", artist="Barrington Levy", album="Robin Hood", confidence=1.0
+    )
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
+    results = run(
+        Source(url="https://youtu.be/blv"),
+        _providers(
+            match,
+            writer,
+            source_title="Barrington Levy - Vibes Is Right (Here I Come)",
+            resolver=resolver,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    assert result.tags.verified is True
+    assert result.tags.artist == "Barrington Levy"
+    assert result.tags.title == "The Vibes Is Right"
+    # Fast path: corroborated by the title itself, so no AI call.
+    assert resolver.witness_calls == []
+
+
 def test_no_match_routes_to_the_review_queue():
     writer = FakeTagWriter()
     results = run(Source(url="https://youtu.be/xyz"), _providers(None, writer))
