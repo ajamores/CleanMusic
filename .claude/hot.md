@@ -1,7 +1,7 @@
 ---
 type: meta
 title: "Hot — muziktest"
-updated: 2026-08-21
+updated: 2026-08-23
 tags: [meta, hot-cache]
 status: evergreen
 ---
@@ -12,37 +12,36 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Real providers are built and wired in `cli.py`: yt-dlp download, **Shazam** fingerprint (`shazamio`), **MusicBrainz** album-by-ISRC, **Haiku** Resolver, MP3/M4A tag writers, JSON review queue. Identity comes from the audio fingerprint; the fakes are test doubles for whole-box tests. Wave 2 is polish, not the core build.
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Real providers built and wired in `cli.py`: yt-dlp download, **Shazam** fingerprint (`shazamio`), **MusicBrainz** album-by-ISRC, **Haiku** Resolver, MP3/M4A tag writers, JSON review queue. Identity comes from the audio fingerprint; fakes are test doubles for whole-box tests.
 
-## Current State (2026-08-21)
+## Current State (2026-08-23)
 
-- Branch **`feat/22-single-song-default-playlist`** (commit `ba6805f`) — **#22 built, 86 tests green, PR open to close #22**. `main` HEAD `5cf94dc`; #4/#7/#8 merged. Core engine complete: download → fingerprint → album waterfall (Shazam → MusicBrainz-by-ISRC → Resolver) → Confidence gate → tag or Review queue.
-- **#22 done** — *single Track by default; `--playlist` to expand.* Downloader gained `expand_playlist` → `noplaylist = not expand_playlist` in `_build_opts`; single mode runs a yt-dlp pre-flight (`extract_info(process=False)`, `_type == 'playlist'`) and refuses a bare playlist via `PlaylistInSingleModeError` (whole-Source rejection, not a per-Track skip) before any download. CLI `--playlist` per-run, never persisted; refusal exits `2`. Two-axis review clean (fixed "song"→"Track" help, aligned message to ADR-0004). Implements ADR-0004.
-- **Confirmed working end-to-end live** (prior session) — `youtu.be/akaI9JgeO9c` → Marvin Gaye — *Trouble Man*, real album Tags + embedded cover art. File saved as `downloads/<video-id>.m4a` (id filename by design; library re-groups by Tags).
+- `main` HEAD `01afbcc`, clean. Core pipeline complete and live-verified: download → fingerprint → album waterfall (Shazam → MusicBrainz-by-ISRC → Resolver) → Confidence gate → tag or Review queue. #4/#7/#8/#22/#24/#25 all merged.
+- **This session's landings:** #32 fixed (archive-skip path no longer aborts a batch on a mid-resolve `DownloadError` or a non-`FileNotFoundError` archive read — `PR #34`). Observation harness `tools/observe.py` added (`PR #35`). ADR-0006 accepted (`PR #36`).
+- **deno installed** and on PATH (`~/.bashrc`) — the smoke suite (`pytest -m smoke`) now runs instead of skipping; 3 smoke + 127 offline green.
 
-## What's next
+## The big decision this session (ADR-0006, Accepted)
 
-- **Merge the #22 PR**, then close #22. After merge, `main` carries `--playlist`.
-- **#25 is now unblocked** — *write an `.m3u8` playlist file when `--playlist` expands a list* (preserve the user's monthly "Aug 2026" grouping). `ready-for-agent`; its blocker (#22) is built and PR'd. Grouping lives in the `.m3u8` beside the files; album Tags stay the real album.
-- **#24 needs triage** — *surface download progress + explain the already-archived no-op.* `needs-triage`: a re-run where every Track is already in `.download-archive.txt` silently prints `0 verified, 0 queued` (hit this live). Verbosity contract is a product call for Armand before it's buildable.
-- Before any worktree fan-out: **`git push` the prep commit first** (worktrees branch from pushed remote — `docs/LEARNINGS.md`).
+**Identity today rests on Shazam alone**, spot-checked only against the Source title/channel; MusicBrainz + Resolver touch only the *album*. An observation run (`tools/observe.py`, 14-track playlist) proved **real Shazam confidence is binary** — every match is hard-coded `1.0` (`fingerprinter.py`), so the `0.9` uploader-only bar (#16) can never fire. Also: the download discards description/tags/thumbnail (only title/channel/duration survive), so the "AI reasons over all evidence" vision in `CONTEXT.md` is unbuilt.
 
-## Parked (filed, blocked on live provider behaviour)
+**Decided (option 3):** the Resolver becomes an **identity witness** — reasons over fingerprint + full download + thumbnail, rules consistent/inconsistent/can't-tell, and the gate verifies on that verdict. Recorded in `docs/adr/0006-identity-evidence-combination.md` (the spec) and `docs/LEARNINGS.md` (the binary-confidence lesson).
 
-- **#16** — confident-wrong Match on an impersonator channel still verifies.
-- **#17** — Resolver-proposed albums get `verified` without an independent check (gate cross-checks the Source title, not the Resolver). Sibling of #16.
+## What's next — pick up here
+
+- **#37** — *Capture description, tags, thumbnail onto the Track.* The prerequisite (today only title/channel/duration are captured). `ready-for-agent`, unblocked. **Start here:** `/implement 37`.
+- **#38** — *Resolver becomes an identity witness; gate verifies on its verdict.* The epic that closes #16 + #17. `ready-for-agent`, **blocked-by #37** (native GitHub dependency). Do after #37, `/clear` context between.
+- #16 / #17 kept open for reference, off the frontier (commented, `ready-for-agent` removed); #38 closes them when built.
 
 ## Recent sessions (rolling — last 2–3)
 
-- **2026-08-21 (#22)** — Built single-Track-by-default + `--playlist` opt-in + bare-playlist refusal (`PlaylistInSingleModeError`, yt-dlp pre-flight). 9 new offline tests (86 green). Two-axis review clean. Branch `feat/22-single-song-default-playlist`, PR open. Unblocks #25.
-- **2026-08-21** — Live sanity-check + triage. Diagnosed the silent `0 verified, 0 queued` re-run (archived video-id) → filed **#24**. Confirmed Tags/cover write cleanly (Marvin Gaye — *Trouble Man*). Settled video-id-vs-title filename (id wins). Filed **#25** (`.m3u8` grouping, blocked-by #22).
-- **2026-08-20 (#8)** — Playlist + bounded concurrency: `ThreadPoolExecutor` in `run()`, `RateLimitedAuthority` (~1 req/s), JSONL O(1) crash-safe queue, yt-dlp `download_archive`. 17 new tests. Two-axis review clean. Merged.
-- **2026-08-20 (#7)** — Review-queue clear pass (accept/manual/hint/skip) over a `ReviewPrompter` seam. Merged PR #19.
+- **2026-08-23** — Implemented #32 (archive-skip abort fix, `PR #34`). Then a design thread: built `tools/observe.py`, ran it on a real 14-track playlist, found Shazam confidence is binary → #16's threshold premise is dead. Drafted + accepted ADR-0006 (Resolver as identity witness). Cut tickets #37 (prereq) + #38 (epic); re-pointed #16/#17. Installed deno.
+- **2026-08-21 (#22)** — Single-Track-by-default + `--playlist` opt-in + bare-playlist refusal (`PlaylistInSingleModeError`, yt-dlp pre-flight). Merged; unblocked #25.
+- **2026-08-21** — Live sanity-check + triage; filed #24 (silent archived re-run) and #25 (`.m3u8` grouping). Both since built/merged.
 
 ## Where the rest of the context lives
 
-- **Decisions:** `docs/adr/` — `0001`/`0002`/`0003`/`0004`. **Glossary:** `CONTEXT.md`. **Spec:** issue #1.
-- **Tickets:** **#22** built (PR open); **#25** now unblocked; **#24** needs-triage; parked **#16**, **#17**.
-- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md`.
-- **Prototype code + verdict tables:** branch `prototype/identify-spike`.
-- **Garden vault** (business/decisions): `/graft` to push, not this board.
+- **Decisions:** `docs/adr/` — `0001`–`0006` (`0006` = the identity-evidence decision). **Glossary:** `CONTEXT.md`. **Spec:** issue #1.
+- **Tickets:** **#37** (next, unblocked), **#38** (blocked-by #37); reference **#16**/**#17**.
+- **Observation harness:** `tools/observe.py` (`python tools/observe.py <url>`); output → gitignored `retest/observe/`.
+- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work) — incl. the binary-Shazam-confidence lesson. **Dev setup:** `docs/DEVELOPMENT.md` (needs deno on PATH for smoke tests).
+- **Prototype code + verdict tables:** branch `prototype/identify-spike`. **Garden vault:** `/graft` to push, not this board.
