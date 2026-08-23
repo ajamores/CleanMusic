@@ -51,6 +51,24 @@ def _is_bare_playlist(ydl: "yt_dlp.YoutubeDL", url: str) -> bool:
     return bool(info) and info.get("_type") == "playlist"
 
 
+def _thumbnail_url(entry: dict) -> str:
+    """The best thumbnail URL yt-dlp offers for an entry, or "" when it names none.
+
+    yt-dlp's top-level ``thumbnail`` is the one it already selected as best; prefer
+    it. When it is absent (some flat or live entries), fall back to the last of
+    ``thumbnails`` — yt-dlp orders that list worst→best, so the last is the highest
+    resolution. Only the URL is carried onto the Track (#37); nothing is fetched here.
+    """
+    top = entry.get("thumbnail")
+    if top:
+        return top
+    thumbnails = entry.get("thumbnails") or []
+    if thumbnails:
+        last = thumbnails[-1]
+        return last.get("url", "") if isinstance(last, dict) else ""
+    return ""
+
+
 def _track_from_entry(
     entry: dict, out_dir: Path, suffix: str, url_fallback: str
 ) -> Track:
@@ -58,6 +76,11 @@ def _track_from_entry(
 
     The uploader is the artist witness the Confidence gate leans on (#11); yt-dlp
     exposes it as ``uploader`` (the channel), falling back to ``channel``, then "".
+
+    Description, tags, and the thumbnail URL are captured as identity evidence for
+    the Resolver's forthcoming identity ruling (#37, ADR-0006) — pure capture, not
+    yet consumed. Each defaults cleanly when yt-dlp omits it (a bare or live entry
+    may carry none): missing or ``None`` text → "", missing tags → [].
     """
     duration = entry.get("duration")
     return Track(
@@ -68,6 +91,11 @@ def _track_from_entry(
         # yt-dlp reports duration as float seconds; the .m3u8 EXTINF (#25) wants a
         # whole number. None when the entry carries no duration.
         duration=int(duration) if duration is not None else None,
+        description=entry.get("description") or "",
+        # Copy yt-dlp's list so the frozen Track owns its tags rather than aliasing
+        # the info dict's mutable list.
+        tags=list(entry.get("tags") or []),
+        thumbnail_url=_thumbnail_url(entry),
     )
 
 

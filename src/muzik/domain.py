@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -30,6 +30,20 @@ class Track:
     #: Runtime in whole seconds, as yt-dlp reports it, for the ``#EXTINF`` line of a
     #: ``--playlist`` run's ``.m3u8`` (#25). None when yt-dlp gives no duration.
     duration: int | None = None
+    #: The Source's own description text, as yt-dlp extracts it. Captured as identity
+    #: evidence for the Resolver's forthcoming identity ruling (#37, ADR-0006);
+    #: nothing consumes it yet. "" when the entry carries none.
+    description: str = ""
+    #: The Source's tags/keywords from yt-dlp — further identity evidence for the
+    #: Resolver (#37, ADR-0006). Empty list when the entry carries none. (Track is a
+    #: reporting record, never hashed, so a list field is safe here.)
+    tags: list[str] = field(default_factory=list)
+    #: URL of the Source's thumbnail — the image the multimodal Resolver will read
+    #: (#37, ADR-0006). Only the URL is captured here: it is cheap and always to hand
+    #: in the info dict, so this ticket stays pure capture with no fetch; the bytes a
+    #: multimodal call needs are pulled on demand where that call is assembled (#38).
+    #: "" when the entry names no thumbnail.
+    thumbnail_url: str = ""
 
 
 @dataclass(frozen=True)

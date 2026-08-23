@@ -523,3 +523,67 @@ def test_entry_without_a_duration_carries_none():
         {"id": "abc", "title": "T"}, out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
     )
     assert track.duration is None
+
+
+# --- capture description/tags/thumbnail as identity evidence (ticket #37) --------
+#
+# Per ADR-0006, the Resolver is to become an identity witness reasoning over the
+# *full* download. This ticket only captures that evidence onto the Track; nothing
+# consumes it yet. The thumbnail is carried as its URL (cheap, no fetch) — bytes are
+# pulled on demand where the multimodal Resolver call is assembled (#38).
+
+
+def test_entry_description_and_tags_are_captured_onto_the_track():
+    track = _track_from_entry(
+        {"id": "abc", "title": "T", "description": "Official audio.",
+         "tags": ["soul", "1972"]},
+        out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    assert track.description == "Official audio."
+    assert track.tags == ["soul", "1972"]
+
+
+def test_entry_thumbnail_url_is_captured_from_the_thumbnail_field():
+    # yt-dlp's top-level `thumbnail` is the one it already picked as best.
+    track = _track_from_entry(
+        {"id": "abc", "title": "T", "thumbnail": "https://img/best.jpg"},
+        out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    assert track.thumbnail_url == "https://img/best.jpg"
+
+
+def test_entry_thumbnail_falls_back_to_the_last_of_the_thumbnails_list():
+    # No top-level `thumbnail` → take the last of `thumbnails` (yt-dlp orders that
+    # list worst→best, so the last is the highest resolution).
+    track = _track_from_entry(
+        {"id": "abc", "title": "T", "thumbnails": [
+            {"url": "https://img/low.jpg"}, {"url": "https://img/high.jpg"},
+        ]},
+        out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    assert track.thumbnail_url == "https://img/high.jpg"
+
+
+def test_entry_without_evidence_fields_defaults_cleanly():
+    # A bare entry (a live cover, a flat entry) may carry none of it — the fields
+    # must default cleanly, never blow up on a missing key or a None value.
+    track = _track_from_entry(
+        {"id": "abc", "title": "T", "description": None, "tags": None,
+         "thumbnails": []},
+        out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    assert track.description == ""
+    assert track.tags == []
+    assert track.thumbnail_url == ""
+
+
+def test_captured_tags_are_copied_not_aliased_to_yt_dlps_list():
+    # The Track owns its tags: mutating yt-dlp's original list must not reach back
+    # into the captured Track (a frozen record should not share mutable state).
+    entry_tags = ["soul"]
+    track = _track_from_entry(
+        {"id": "abc", "title": "T", "tags": entry_tags},
+        out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    entry_tags.append("mutated")
+    assert track.tags == ["soul"]
