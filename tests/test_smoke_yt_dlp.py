@@ -143,6 +143,15 @@ def test_smoke_archived_rerun_records_nothing_new(out_dir):
 def test_smoke_playlist_expansion_yields_both_tracks(out_dir):
     # Case 3: `--playlist` (expand_playlist=True) on a 2-item playlist expands to two
     # Tracks. Single mode would collapse a list to one; expansion is the difference.
+    #
+    # It also confirms the two yt-dlp fields the .m3u8 feature (#25) assumes real —
+    # both encoded only in fakes elsewhere, exactly the gap LEARNINGS warns about:
+    #   * real yt-dlp classifies the URL as a playlist, so `playlist_title` is set
+    #     (a str, "" or named) rather than left None — the signal the engine writes
+    #     an .m3u8 on;
+    #   * real entries carry a `duration`, so #EXTINF gets whole seconds, not -1.
+    # Shape only: the title's exact text and the durations' values are yt-dlp's, so
+    # asserting a set title / a positive int (not a specific one) can't flake.
     downloader = YtDlpDownloader(out_dir=out_dir, expand_playlist=True)
 
     tracks = downloader.download(Source(url=_PLAYLIST_URL))
@@ -150,3 +159,7 @@ def test_smoke_playlist_expansion_yields_both_tracks(out_dir):
     ids = {t.audio_path.stem for t in tracks}
     assert ids == {_VIDEO_ID, _SECOND_VIDEO_ID}
     assert downloader.skipped == []
+    assert downloader.playlist_title is not None  # a real expansion was detected (#25)
+    assert any(
+        isinstance(t.duration, int) and t.duration > 0 for t in tracks
+    ), "no Track carried a real duration for #EXTINF"

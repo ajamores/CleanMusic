@@ -59,11 +59,15 @@ def _track_from_entry(
     The uploader is the artist witness the Confidence gate leans on (#11); yt-dlp
     exposes it as ``uploader`` (the channel), falling back to ``channel``, then "".
     """
+    duration = entry.get("duration")
     return Track(
         source_url=entry.get("webpage_url", url_fallback),
         audio_path=out_dir / f"{entry['id']}{suffix}",
         source_title=entry.get("title", ""),
         uploader=entry.get("uploader") or entry.get("channel") or "",
+        # yt-dlp reports duration as float seconds; the .m3u8 EXTINF (#25) wants a
+        # whole number. None when the entry carries no duration.
+        duration=int(duration) if duration is not None else None,
     )
 
 
@@ -98,6 +102,10 @@ class YtDlpDownloader:
         #: Video ids already announced this batch, so the progress hook prints each
         #: Track's title once (#24).
         self._announced: set[str] = set()
+        #: The expanded playlist's own title (#25), set during ``download`` only when
+        #: a ``--playlist`` run resolved a Source to a playlist. ``None`` in single
+        #: mode — the engine writes no ``.m3u8`` then, there being no list to preserve.
+        self.playlist_title: str | None = None
 
     def _announce_download(self, status: dict) -> None:
         """yt-dlp progress hook: print each Track's resolved title once, so a fetch
@@ -168,6 +176,14 @@ class YtDlpDownloader:
                         "that's a playlist; pass --playlist to download all of it"
                     )
                 info = ydl.extract_info(source.url, download=True)
+                if self._expand_playlist and info and info.get("_type") == "playlist":
+                    # yt-dlp's own classification names the playlist (#25) — the same
+                    # principle as the bare-playlist check: the title is yt-dlp's to
+                    # give, never a Muzik URL regex. Set (to "" if yt-dlp names none)
+                    # on a real expansion, so the grouping is always written — the
+                    # writer falls back to "playlist" for an empty title. Single mode
+                    # leaves it None, so nothing is written there.
+                    self.playlist_title = info.get("title") or ""
         except DownloadError as error:
             # Any download failure — age wall, private/deleted video, network —
             # routes the Source to the Review queue and lets the batch go on

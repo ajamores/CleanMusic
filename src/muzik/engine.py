@@ -19,6 +19,7 @@ from pathlib import Path
 from muzik.domain import (
     Match,
     MatchConflict,
+    PlaylistEntry,
     ReviewAction,
     ReviewDecision,
     ReviewItem,
@@ -31,6 +32,7 @@ from muzik.providers import (
     Authority,
     Downloader,
     Fingerprinter,
+    PlaylistWriter,
     Resolver,
     ReviewPrompter,
     ReviewQueue,
@@ -50,6 +52,19 @@ class _NullReviewQueue:
         pass
 
 
+class _NullPlaylistWriter:
+    """Writes no playlist file. The default when a caller opts out (single-mode
+    runs, and tests that don't assert a ``.m3u8``). Real ``--playlist`` runs wire
+    the M3U8 writer in ``cli.py``.
+    """
+
+    #: Always None — this writer never produces a file (part of the seam contract).
+    last_written: Path | None = None
+
+    def write(self, title: str, entries: list[PlaylistEntry]) -> Path | None:  # noqa: D102
+        return None
+
+
 @dataclass(frozen=True)
 class Providers:
     """The injected providers the engine runs against."""
@@ -60,6 +75,7 @@ class Providers:
     resolver: Resolver
     tagwriter: TagWriter
     review_queue: ReviewQueue = field(default_factory=_NullReviewQueue)
+    playlist_writer: PlaylistWriter = field(default_factory=_NullPlaylistWriter)
 
 
 @dataclass(frozen=True)
@@ -111,7 +127,35 @@ def run(
             providers.review_queue.enqueue(_review_item(result, track))
     for source_url, reason in providers.downloader.skipped:
         providers.review_queue.enqueue(ReviewItem(source_url=source_url, reason=reason))
+    _write_playlist(tracks, results, providers)
     return results
+
+
+def _write_playlist(
+    tracks: list[Track], results: list[TrackResult], providers: Providers
+) -> None:
+    """Preserve a ``--playlist`` run's grouping as one ``.m3u8`` beside the Tracks (#25).
+
+    Only a real playlist expansion has a title to write under (the Downloader sets
+    ``playlist_title`` then, ``None`` in single mode — no list, no file). Lists only
+    the Tracks that produced a file, in playlist order, so a fingerprint miss or a
+    failed download leaves no dead pointer; ``results`` line up with ``tracks`` by
+    index, which is where each Track's duration for ``#EXTINF`` comes from.
+    """
+    title = providers.downloader.playlist_title
+    if title is None:
+        return
+    entries = [
+        PlaylistEntry(
+            duration=track.duration,
+            artist=result.tags.artist,
+            title=result.tags.title,
+            path=result.output_path,
+        )
+        for track, result in zip(tracks, results)
+        if result.output_path is not None and result.tags is not None
+    ]
+    providers.playlist_writer.write(title, entries)
 
 
 def _process_tracks(

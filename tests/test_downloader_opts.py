@@ -389,3 +389,69 @@ def test_playlist_mode_expands_a_bare_playlist_without_refusing(tmp_path, monkey
     )
 
     assert [t.audio_path.stem for t in tracks] == ["a", "b"]
+
+
+# --- playlist title + duration for the .m3u8 (ticket #25) -----------------------
+
+
+def test_a_playlist_expansion_captures_yt_dlps_own_title(tmp_path, monkeypatch):
+    # The .m3u8 (#25) is named after the playlist's own title as yt-dlp classifies
+    # it — captured on the download result, never parsed from the URL.
+    fake = _RecordingYoutubeDL(
+        preflight={"_type": "playlist"},
+        download_info={"_type": "playlist", "title": "Aug 2026", "entries": [
+            {"id": "a", "title": "A"},
+        ]},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert downloader.playlist_title == "Aug 2026"
+
+
+def test_a_titleless_expansion_still_signals_a_write(tmp_path, monkeypatch):
+    # A real expansion whose yt-dlp info carries no title must still write a .m3u8
+    # (the grouping is the point) — so playlist_title is "" (not None), which the
+    # engine treats as "expanded" and the writer names "playlist" (#25).
+    fake = _RecordingYoutubeDL(
+        preflight={"_type": "playlist"},
+        download_info={"_type": "playlist", "entries": [{"id": "a", "title": "A"}]},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert downloader.playlist_title == ""  # signals a write, not None (single mode)
+
+
+def test_single_mode_leaves_the_playlist_title_unset(tmp_path, monkeypatch):
+    # A single video is not a playlist: no title, so the engine writes no .m3u8.
+    fake = _RecordingYoutubeDL(
+        preflight={"_type": "url", "id": "X"},
+        download_info={"id": "X", "title": "Song X"},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    downloader.download(Source(url="https://youtu.be/X"))
+
+    assert downloader.playlist_title is None
+
+
+def test_entry_duration_is_carried_onto_the_track_as_whole_seconds():
+    # yt-dlp reports duration as float seconds; the EXTINF line wants an int (#25).
+    track = _track_from_entry(
+        {"id": "abc", "title": "T", "duration": 201.6},
+        out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    assert track.duration == 201
+
+
+def test_entry_without_a_duration_carries_none():
+    track = _track_from_entry(
+        {"id": "abc", "title": "T"}, out_dir=Path("/out"), suffix=".m4a", url_fallback="u",
+    )
+    assert track.duration is None
