@@ -284,6 +284,74 @@ def test_an_unresolvable_empty_source_is_not_an_archive_skip(tmp_path, monkeypat
     assert downloader.skipped == []
 
 
+def _raising_flat_entries():
+    """A lazy resolve generator (the process=False shape) that raises partway —
+    a transient network/HTTP error mid-pagination (#32)."""
+    yield {"id": "a"}
+    raise DownloadError("ERROR: Unable to download webpage (HTTP Error 403)")
+
+
+class _MidResolveRaisingYoutubeDL:
+    """The archive-free resolve returns a *lazy* entries generator that raises
+    ``DownloadError`` as it is iterated — exactly what ``process=False`` does (#32).
+
+    The download pulls nothing (a fully-archived re-run), so ``_all_archived`` runs
+    and calls ``_resolve_entry_ids``; its generator blows up while being materialised,
+    *outside* the download's own ``except DownloadError``.
+    """
+
+    def __call__(self, opts: dict) -> "_MidResolveRaisingYoutubeDL":
+        return self
+
+    def __enter__(self) -> "_MidResolveRaisingYoutubeDL":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def extract_info(self, url: str, download: bool = True, process: bool = True):
+        if download:
+            return None  # fully archived → yt-dlp pulled nothing
+        return {"_type": "playlist", "entries": _raising_flat_entries()}
+
+
+def test_a_mid_resolve_download_error_degrades_not_aborts(tmp_path, monkeypatch):
+    # The archive-free resolve returns a lazy generator (process=False); a transient
+    # error while paginating it raises DownloadError *outside* the download's own
+    # catch. It must degrade to "can't confirm a re-run" — empty result, no crash —
+    # never abort the batch (#32 / ADR-0002).
+    _write_archive(tmp_path, "a")
+    monkeypatch.setattr(
+        "muzik.real.downloader.yt_dlp.YoutubeDL", _MidResolveRaisingYoutubeDL()
+    )
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    tracks = downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert tracks == []
+    assert downloader.archive_skips == []  # couldn't confirm a re-run → not a skip
+    assert downloader.skipped == []
+
+
+def test_a_non_missing_archive_read_error_degrades_to_no_archive(tmp_path, monkeypatch):
+    # The archive path is unreadable for a reason other than "missing" — here it is
+    # unexpectedly a directory (IsADirectoryError, not FileNotFoundError). That must
+    # degrade to "no usable archive" (so, not a confirmed re-run), never abort the
+    # batch (#32).
+    (tmp_path / ".download-archive.txt").mkdir()  # a directory where a file is expected
+    fake = _ScriptedYoutubeDL(
+        preflight={"id": "X", "extractor_key": "Youtube"}, download_info=None
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/X"))
+
+    assert tracks == []
+    assert downloader.archive_skips == []  # no usable archive → not a confirmed re-run
+    assert downloader.skipped == []
+
+
 def test_age_restriction_without_cookies_is_still_skipped(tmp_path, monkeypatch):
     # The existing friendly age-restriction path must survive the broadened catch.
     raiser = _RaisingYoutubeDL("ERROR: Sign in to confirm your age")

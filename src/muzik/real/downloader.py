@@ -257,18 +257,26 @@ class YtDlpDownloader:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False, process=False)
+                if not info:
+                    return []
+                # With process=False, info["entries"] is a LAZY generator: the real
+                # page-by-page extraction runs as it is iterated, so materialise the
+                # ids *inside* the try. A DownloadError mid-pagination (a transient
+                # network/HTTP error, a page that 403s) then degrades to "not a re-run"
+                # here, rather than escaping to abort the batch (#32 / ADR-0002).
+                entries = info["entries"] if "entries" in info else [info]
+                return [entry["id"] for entry in entries if entry and entry.get("id")]
         except DownloadError:
             return []  # the Source no longer resolves — treat as empty, not a re-run
-        if not info:
-            return []
-        entries = info["entries"] if "entries" in info else [info]
-        return [entry["id"] for entry in entries if entry and entry.get("id")]
 
     def _archived_ids(self) -> set[str]:
         """The video ids already in the download archive. Its lines are
         ``<extractor> <id>`` (#8); the id is the last field, extractor aside."""
         try:
             text = self._archive_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        except OSError:
+            # Any read failure — the file is missing, permission denied, or the path
+            # is unexpectedly a directory — means no usable archive, so degrade to
+            # "not a re-run". Archive bookkeeping must never abort the batch (#32).
             return set()
         return {line.split()[-1] for line in text.splitlines() if line.strip()}
