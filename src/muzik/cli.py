@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from muzik.domain import (
+    IdentityRuling,
     Match,
     MatchConflict,
     ReviewDecision,
@@ -45,6 +46,11 @@ class _DisabledResolver:
     def resolve(self, track: Track, match: Match | None) -> Match | None:
         return None
 
+    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+        # No key, no witness: the gate keeps the Match unverified and routes it to
+        # Review, exactly as an ``unsure`` verdict would (CONTEXT.md: never block).
+        return IdentityRuling(verdict="unsure", rationale="AI Resolver disabled (no API key)")
+
 
 def _build_resolver() -> Resolver:
     """The real Haiku Resolver when a Claude key is present, else a disabled one.
@@ -55,7 +61,8 @@ def _build_resolver() -> Resolver:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print(
             "note: no ANTHROPIC_API_KEY (set it in the environment or a .env file) — "
-            "the AI album Resolver is disabled; Tracks needing it go to review."
+            "the AI Resolver is disabled (album waterfall and identity witness); "
+            "Tracks needing it go to review."
         )
         return _DisabledResolver()
     return HaikuResolver()

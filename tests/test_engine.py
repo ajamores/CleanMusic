@@ -18,17 +18,21 @@ def _providers(
     tag_writer: FakeTagWriter,
     source_title: str = "Fake Video",
     uploader: str = "",
+    resolver: FakeResolver | None = None,
 ) -> Providers:
     return Providers(
         # The Source's own title is what the Confidence gate cross-checks the
         # Match against; drive it (and the uploader — the gate's artist witness)
-        # per-test via the fake Downloader.
+        # per-test via the fake Downloader. The Resolver is the identity witness
+        # the gate consults on the uncorroborated path (#38); default is a Resolver
+        # that can't tell ("unsure"), so an uncorroborated Match stays unverified
+        # unless a test supplies a verdict.
         downloader=FakeDownloader(
             audio_path=Path("/fake/audio.m4a"), title=source_title, uploader=uploader
         ),
         fingerprinter=FakeFingerprinter(match=match),
         authority=FakeAuthority(),
-        resolver=FakeResolver(),
+        resolver=resolver if resolver is not None else FakeResolver(),
         tagwriter=tag_writer,
     )
 
@@ -180,8 +184,9 @@ def test_confidence_gate_rejects_a_match_whose_artist_contradicts_the_source():
 
 def test_confidence_gate_verifies_when_the_uploader_supplies_the_artist():
     # An official-artist upload: the Source title is bare ("Never Gonna Give You
-    # Up", no "Artist -"), and the artist witness comes from the "Rick Astley -
-    # Topic" channel. Title and artist both corroborate the Match → verified.
+    # Up", no "Artist -"), and the only artist witness is the "Rick Astley - Topic"
+    # channel — assertable, not independent. This is the uncorroborated path, so
+    # the identity witness rules (#38). A genuine channel → consistent → verified.
     match = Match(
         title="Never Gonna Give You Up",
         artist="Rick Astley",
@@ -190,6 +195,7 @@ def test_confidence_gate_verifies_when_the_uploader_supplies_the_artist():
         confidence=0.99,
     )
     writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")
     results = run(
         Source(url="https://youtu.be/dQw4"),
         _providers(
@@ -197,6 +203,7 @@ def test_confidence_gate_verifies_when_the_uploader_supplies_the_artist():
             writer,
             source_title="Never Gonna Give You Up (Official Music Video)",
             uploader="Rick Astley - Topic",
+            resolver=resolver,
         ),
     )
 
@@ -205,17 +212,24 @@ def test_confidence_gate_verifies_when_the_uploader_supplies_the_artist():
     assert result.tags.verified is True
     assert result.tags.artist == "Rick Astley"
     assert result.tags.title == "Never Gonna Give You Up"
+    # The witness was consulted — the channel alone can't verify (#38).
+    assert resolver.witness_calls == [match]
 
 
 def test_confidence_gate_normalises_a_vevo_channel_into_the_artist_witness():
-    # A label channel "AdeleVEVO" normalises to "Adele", which then corroborates
-    # the Match's artist — the XVEVO → X clause working as a real witness.
+    # A label channel "AdeleVEVO" normalises to "Adele" — but a channel name is
+    # assertable, so this is still the uncorroborated path. With the witness ruling
+    # consistent, the normalised channel is trusted and the Match verifies.
     match = Match(title="Hello", artist="Adele", album="25", confidence=0.99)
     writer = FakeTagWriter()
     results = run(
         Source(url="https://youtu.be/hi"),
         _providers(
-            match, writer, source_title="Hello (Official Video)", uploader="AdeleVEVO"
+            match,
+            writer,
+            source_title="Hello (Official Video)",
+            uploader="AdeleVEVO",
+            resolver=FakeResolver(verdict="consistent"),
         ),
     )
 
@@ -248,51 +262,62 @@ def test_confidence_gate_keeps_the_match_unverified_when_there_is_no_signal():
     assert result.tags.album == "Monologues"
 
 
-def test_confidence_gate_rejects_a_low_confidence_match_backed_only_by_the_channel_name():
-    # The channel-impersonation hole (#14): the fingerprint is UNSURE (low
-    # confidence), the Source title merely echoes the Match's title, and the only
-    # artist witness is the uploader — a channel *named* after the Match's artist,
-    # which anyone can set. Two witnesses, but one is a nametag the channel wrote
-    # itself. A low-confidence Match must not ride the channel name to verified.
+def test_confidence_gate_routes_an_uploader_only_match_to_review_when_the_witness_dissents():
+    # The channel-impersonation hole (#16), now closed by the identity witness: the
+    # Source title merely echoes the Match's title, and the only artist witness is
+    # the uploader — a channel *named* after the artist, which anyone can set. The
+    # (retired) confidence bar can't catch this — Shazam confidence is binary. The
+    # witness rules on the full evidence; an `inconsistent` verdict keeps the Match
+    # out of the verified Tags.
     match = Match(
         title="Hello",
         artist="Adele",
         album="25",
         cover_art=b"JPEGBYTES",
-        confidence=0.4,
+        confidence=1.0,
     )
     writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="inconsistent")
     results = run(
         Source(url="https://youtu.be/imp"),
-        _providers(match, writer, source_title="Hello (Official Video)", uploader="Adele"),
+        _providers(
+            match,
+            writer,
+            source_title="Hello (Official Video)",
+            uploader="Adele",
+            resolver=resolver,
+        ),
     )
 
     result = results[0]
     assert result.tags is not None
-    # Unsure fingerprint + channel-name-only witness → not verified, queued.
+    # Witness dissented → not verified, queued.
     assert result.tags.verified is False
     assert result.reason is not None
+    assert resolver.witness_calls == [match]
     # The Match is kept (not clobbered with garbage), just left for review.
     assert result.tags.title == "Hello"
     assert result.tags.artist == "Adele"
 
 
-def test_confidence_gate_verifies_a_low_confidence_match_the_source_title_itself_backs():
-    # The independence clause (#14): confidence only gates the *uploader-only*
-    # case. When the Source's own title carries the artist ("Adele - Hello"), that
-    # is an independent witness the channel can't fake, so a low-confidence Match
-    # is still verified — the confidence factor must not touch this path.
+def test_confidence_gate_verifies_when_the_source_title_itself_backs_the_artist_without_the_witness():
+    # The independence path: when the Source's own title carries the artist
+    # ("Adele - Hello"), that is a witness the channel can't fake — so the Match is
+    # verified on the fast path with NO AI call, regardless of confidence (#38).
     match = Match(
         title="Hello",
         artist="Adele",
         album="25",
         cover_art=b"JPEGBYTES",
-        confidence=0.4,
+        confidence=1.0,
     )
     writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
     results = run(
         Source(url="https://youtu.be/ind"),
-        _providers(match, writer, source_title="Adele - Hello (Official Video)"),
+        _providers(
+            match, writer, source_title="Adele - Hello (Official Video)", resolver=resolver
+        ),
     )
 
     result = results[0]
@@ -300,25 +325,32 @@ def test_confidence_gate_verifies_a_low_confidence_match_the_source_title_itself
     assert result.tags.verified is True
     assert result.tags.artist == "Adele"
     assert result.tags.title == "Hello"
+    # Fast path: the witness is never consulted, even though it would have dissented.
+    assert resolver.witness_calls == []
 
 
-def test_confidence_gate_verifies_a_high_confidence_match_backed_by_the_channel_name():
-    # The other side of the #14 bar, paired with the reject test above: same
-    # uploader-only shape, but a confident fingerprint (0.99). When the Match
-    # clears the confidence bar the channel witness is trusted and the Match is
-    # verified — the #11 official-channel happy path stays intact. The 0.99 here
-    # is load-bearing: drop it below the bar and this must flip to unverified.
+def test_confidence_gate_verifies_an_uploader_only_match_when_the_witness_agrees():
+    # The other side of the witness: same uploader-only shape (channel "Adele"
+    # supplies the artist the bare title doesn't), but a `consistent` verdict — a
+    # genuine artist channel. The witness is trusted and the Match verifies.
     match = Match(
         title="Hello",
         artist="Adele",
         album="25",
         cover_art=b"JPEGBYTES",
-        confidence=0.99,
+        confidence=1.0,
     )
     writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")
     results = run(
         Source(url="https://youtu.be/vev"),
-        _providers(match, writer, source_title="Hello (Official Video)", uploader="Adele"),
+        _providers(
+            match,
+            writer,
+            source_title="Hello (Official Video)",
+            uploader="Adele",
+            resolver=resolver,
+        ),
     )
 
     result = results[0]
@@ -326,6 +358,7 @@ def test_confidence_gate_verifies_a_high_confidence_match_backed_by_the_channel_
     assert result.tags.verified is True
     assert result.tags.artist == "Adele"
     assert result.tags.title == "Hello"
+    assert resolver.witness_calls == [match]
 
 
 def test_a_provisional_track_carries_the_rejected_match_conflict():

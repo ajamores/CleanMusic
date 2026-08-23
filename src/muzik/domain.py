@@ -8,6 +8,13 @@ from typing import Literal
 
 ReviewAction = Literal["accept", "manual", "hint", "skip"]
 
+#: The Resolver's ruling on whether a fingerprint identity fits a Track's own
+#: evidence (ADR-0006). ``consistent`` — the evidence backs the Match; may verify.
+#: ``inconsistent`` — the evidence contradicts it; route to Review. ``unsure`` —
+#: not enough to tell (also the safe degradation when the AI call fails/timeouts,
+#: ADR-0002): keep unverified, Review.
+IdentityVerdict = Literal["consistent", "inconsistent", "unsure"]
+
 
 @dataclass(frozen=True)
 class Source:
@@ -56,6 +63,22 @@ class Match:
     cover_art: bytes | None = None
     isrc: str | None = None
     confidence: float = 0.0
+
+
+@dataclass(frozen=True)
+class IdentityRuling:
+    """The Resolver's identity verdict over a Track's full evidence (ADR-0006).
+
+    Distinct from the Resolver's album-naming role: this rules on whether the
+    *fingerprint's identity itself* is consistent with the Source's own metadata
+    (title, channel, description, tags, thumbnail), so the Confidence gate can
+    verify on an independent witness rather than on Shazam alone. The ``rationale``
+    is a short human-readable line, carried for the Review output; the gate keys
+    only off ``verdict``.
+    """
+
+    verdict: IdentityVerdict
+    rationale: str = ""
 
 
 @dataclass(frozen=True)

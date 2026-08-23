@@ -1,6 +1,6 @@
 # Identification combines all the evidence: the Resolver becomes an identity witness
 
-**Status: Accepted (option 3)** — decided 2026-08-23. Identity will no longer rest on Shazam alone: when the fingerprint's identity is uncorroborated, the Resolver reasons over the fingerprint result *and* the full download (title, channel, description, tags, thumbnail) and rules on whether the identification is right, and the Confidence gate verifies on that verdict. Grew out of the observation run for #16/#17 (`tools/observe.py`) and the finding in `docs/LEARNINGS.md` that real Shazam confidence is binary. Implemented as the epic below (tickets A–C); this ADR is the spec.
+**Status: Accepted (option 3) — implemented (#38, 2026-08-23).** The identity witness ships in `resolver.witness_identity` and the `_confidence_gate` uncorroborated path; the confidence bar is retired (see ADR-0002 and ADR-0003 amendments). Identity no longer rests on Shazam alone: when the fingerprint's identity is uncorroborated, the Resolver reasons over the fingerprint result *and* the full download (title, channel, description, tags, thumbnail) and rules on whether the identification is right, and the Confidence gate verifies on that verdict. Grew out of the observation run for #16/#17 (`tools/observe.py`) and the finding in `docs/LEARNINGS.md` that real Shazam confidence is binary. Implemented as the epic below (tickets A–C); this ADR is the spec.
 
 ## What the engine actually does today
 

@@ -19,3 +19,11 @@ Guard against confident-wrong Matches with a **Confidence gate**: cross-check th
 - Optimized pipeline measured **0.4s/track** (tagging, concurrent; downloads add a parallelised ~3–4s/track).
 - Sources can be **age-restricted** (need `--cookies`) or absent from the fingerprint database; both route to the Review queue rather than failing the batch.
 - Prototype code and full result tables live on branch `prototype/identify-spike`.
+
+## Amendment (#38, ADR-0006): the Resolver also witnesses identity
+
+The Confidence gate no longer rests on Shazam alone. A live observation run proved real Shazam confidence is **binary** (every match `1.0`, hard-coded — `docs/LEARNINGS.md`), so there is no score to lean on when the Source's own title corroborates a Match only through the channel name (an impersonator, #16) or not at all (#17). On that **uncorroborated path**, the gate now consults the **Resolver as an identity witness**: it reasons over the fingerprint Match *and* the full download — title, channel, description, tags, and thumbnail (a multimodal Haiku call) — and rules `consistent` / `inconsistent` / `unsure`. `consistent` may verify; `inconsistent` / `unsure` keep the Track unverified (Review). This is the "LLM-fusion over all evidence" alternative above, taken off reserve for exactly the case it was kept for — a Source whose title carries no independent artist signal.
+
+- **Speed.** The witness fires **only** on the uncorroborated path; a Match the Source title independently corroborates (title + artist) still verifies with **no AI call** — the common case is unchanged. The witness call is bounded by a timeout.
+- **Degradation holds.** A witness failure or timeout degrades to `unsure` (→ Review), never aborts the batch — the same batch-never-blocks contract as the album waterfall's tiers.
+- This closes #16 and #17 (see ADR-0003's amendment, which supersedes the confidence-bar rule).
