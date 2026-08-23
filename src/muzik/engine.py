@@ -530,11 +530,14 @@ def _confidence_gate(
     Three paths (see the header comment). The Match is verified outright only when
     the Source's own title corroborates it on **both** title and artist — a witness
     a channel can't fake, and the common case, so it takes no AI call (#38). When
-    the title echoes the Match but the Source names no artist of its own, the
-    identity rests on the channel (assertable) or nothing; there the Resolver is
-    consulted as an independent identity witness (ADR-0006), replacing the retired
-    confidence bar (Shazam confidence is binary — docs/LEARNINGS.md). An actively
-    contradicting Source is kept provisional without an AI call.
+    the title echoes the Match but its own title doesn't corroborate the artist, the
+    identity rests on the channel (assertable), on nothing, or on a *parse* that may
+    be reversed or dressed — a dumb "Artist - Title" split is not a reliable
+    contradiction signal (#42). There the Resolver is consulted as an independent
+    identity witness (ADR-0006), replacing the retired confidence bar (Shazam
+    confidence is binary — docs/LEARNINGS.md). Only a Source whose title names a
+    *different* recording is kept provisional without an AI call — a real
+    contradiction, which also bounds the added AI cost (#38).
     """
     title_witness = _identity_tokens(_source_artist(track.source_title))
     title_agrees = _agrees(match, track.source_title)
@@ -544,17 +547,20 @@ def _confidence_gate(
     if title_agrees and corroborated_by_title:
         return replace(tags, verified=True), None, None
 
-    # Uncorroborated but not contradicted: the title echoes the Match, yet the
-    # Source names no artist of its own to independently back it. Consult the
-    # identity witness instead of the (now-retired) confidence bar (#38).
-    if title_agrees and not title_witness:
+    # Title echoes the Match, but the Source's own title doesn't independently back
+    # the artist — no artist witness, or a parse that may be reversed/dressed (a
+    # naive "Artist - Title" split can't be trusted as a contradiction, #42).
+    # Consult the identity witness instead of the (retired) confidence bar (#38).
+    # On a `consistent` verdict the fingerprint's tags (already in `tags`) are
+    # written verified — never the possibly-reversed Source parse.
+    if title_agrees:
         verdict = _identity_verdict(track, match, resolver)
         if verdict == "consistent":
             return replace(tags, verified=True), None, None
         return _unverified(tags, track, match, verdict)
 
-    # Contradicted, or the title doesn't echo the Match at all: never write the
-    # Match as truth — fall back to the Source's own identity, best-effort. No AI.
+    # The title names a different recording — a real contradiction. Never write the
+    # Match as truth; fall back to the Source's own identity, best-effort. No AI.
     return _unverified(tags, track, match, None)
 
 
@@ -597,18 +603,17 @@ def _unverified(
 def _conflict_why(match: Match, track: Track, verdict: IdentityVerdict | None) -> str:
     """A short line naming why the gate kept the Track provisional (#24).
 
-    A title the Source doesn't echo, an artist it contradicts, or — when the
-    identity witness was consulted — its ruling.
+    Either the Source's title names a different recording (``verdict`` is ``None`` — the
+    witness never ran), or the title echoed the Match but the identity witness would
+    not confirm it (#42): its ruling — ``inconsistent`` or, failing that, ``unsure``.
     """
     if not _agrees(match, track.source_title):
         return "title didn't match, kept provisional"
     if verdict == "inconsistent":
         return "the identity witness ruled the Match inconsistent with the video, kept provisional"
-    if verdict == "unsure":
-        return "the identity witness couldn't confirm the Match, kept provisional"
-    if not _source_artist(track.source_title) and not _normalise_uploader(track.uploader):
-        return "no artist witness to confirm it, kept provisional"
-    return "artist didn't match, kept provisional"
+    # verdict == "unsure": a `consistent` ruling verifies, so this is the only
+    # remaining case once the title agrees (#42).
+    return "the identity witness couldn't confirm the Match, kept provisional"
 
 
 def _identity_verdict(track: Track, match: Match, resolver: Resolver) -> IdentityVerdict:
