@@ -29,8 +29,12 @@ The check that decides whether a Match is trustworthy enough to write as verifie
 _Avoid_: validation, score
 
 **Resolver**:
-The AI step that reasons over *all* available evidence for a Track at once — the fingerprint result, yt-dlp's extracted metadata (title, channel, description, tags), and the thumbnail — cross-checking them to propose the best identity. It proposes an identity; it does not author final Tags except as a last resort.
+The AI step that reasons over *all* available evidence for a Track at once — the fingerprint result, yt-dlp's extracted metadata (title, channel, description, tags), and the thumbnail — cross-checking them. It has two roles: as an **identity witness** it rules on whether a fingerprint's identity is consistent with that evidence (see **Identity verdict**), which the Confidence gate verifies on; and as the last tier of the **Authority** waterfall it proposes a canonical album. It does not author final Tags except as a last resort.
 _Avoid_: AI, GPT, model
+
+**Identity verdict**:
+The Resolver's ruling, as an identity witness, on whether a Match fits a Track's own evidence (ADR-0006): **consistent** (the evidence backs the Match — it may verify), **inconsistent** (the evidence contradicts it — route to Review), or **unsure** (too little to tell — kept unverified, and the safe degradation when the AI call fails). The Confidence gate consults it only on the *uncorroborated* path, where the Source's own title carries no independent artist witness; a title-corroborated Match verifies with no verdict.
+_Avoid_: score, confidence (the verdict is not a number — Match confidence is binary)
 
 ### Output
 

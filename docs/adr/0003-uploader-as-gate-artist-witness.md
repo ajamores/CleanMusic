@@ -22,3 +22,11 @@ There is no test that separates a real artist channel from one merely named afte
 
 - **Threshold = `0.9`.** A deliberately high bar: the channel-only path is the weakest evidence the gate accepts, so it demands the fingerprinter be near-certain. It sits below the `0.99` that fixtures and real high-confidence matches carry, so genuine official-channel uploads (`"Artist - Topic"`, `"…VEVO"`) still verify. The value is a single named constant in `engine.py`; revisit against real fingerprint-confidence distributions once the real Fingerprinter lands.
 - Bias remains toward strictness (ADR-0002): a wrong tag written as truth is worse than an honest weak one, and a channel name alone is not truth.
+
+## Amendment (#38, ADR-0006): the confidence bar is retired; an identity witness takes the uploader-only path
+
+The amendment above bet that **confidence** would separate a genuine artist channel from an impersonator. It didn't — the observation run for #16 showed real Shazam confidence is **binary**: every match is hard-coded `1.0` (`docs/LEARNINGS.md`), so `1.0 ≥ 0.9` always and the bar is **inert on real data**. The `#14` amendment was reasoning from the *fake* Fingerprinter, which grades confidence; the real one does not.
+
+So the bar was right that the lever is not independence-of-*witnesses* — but wrong that it is confidence. The real independent signal is an **AI cross-examination of all the evidence**. Per **ADR-0006 / #38**, on the uploader-only path the gate now consults the Resolver's **identity verdict** (`consistent` / `inconsistent` / `unsure`) over the fingerprint plus the full download, instead of `Match.confidence`.
+
+**Superseding rule.** `_UPLOADER_ONLY_MIN_CONFIDENCE` is **removed**; `Match.confidence` is treated as binary (matched / not), never thresholded. When the artist agreement rests solely on the uploader — or the Source names no artist at all — the identity witness decides: `consistent` → verified; `inconsistent` / `unsure` → kept unverified (Review). When the Source's own title independently corroborates the artist, the fast path verifies with no witness call, unchanged. This closes **#16** (impersonator channel) and **#17** (a Resolver album on a title-agreeing Track): both are now governed by the verdict, not by a threshold or by Shazam alone.

@@ -9,7 +9,15 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from muzik.domain import Match, ReviewItem, Source, Tags, Track
+from muzik.domain import (
+    IdentityRuling,
+    IdentityVerdict,
+    Match,
+    ReviewItem,
+    Source,
+    Tags,
+    Track,
+)
 from muzik.settings import OutputFormat
 
 
@@ -113,23 +121,41 @@ class FakeAuthority:
 
 
 class FakeResolver:
-    """Stands in for the AI Resolver's final waterfall tier (#4).
+    """Stands in for the AI Resolver (#4, #38).
 
-    ``resolve`` proposes the preset ``album`` (folded onto the Match), or nothing
-    when ``album`` is None — the default, which mirrors a Resolver that declines.
-    Each call is recorded on ``resolve_calls`` so a whole-box test can assert
-    whether the tier was reached at all (it must fire only when the catalogs miss).
+    Album tier: ``resolve`` proposes the preset ``album`` (folded onto the Match),
+    or nothing when ``album`` is None — the default, mirroring a Resolver that
+    declines. Identity witness (#38): ``witness_identity`` returns the preset
+    ``verdict`` (``unsure`` by default, mirroring a Resolver that can't tell — and
+    the safe degradation). Set ``witness_raises`` to simulate a provider failure
+    the gate must survive (ADR-0002). Both call-logs let a whole-box test assert
+    whether — and how often — each capability was reached; the gate must consult
+    the witness only on the uncorroborated path (speed, #38).
     """
 
-    def __init__(self, album: str | None = None) -> None:
+    def __init__(
+        self,
+        album: str | None = None,
+        verdict: IdentityVerdict = "unsure",
+        witness_raises: bool = False,
+    ) -> None:
         self._album = album
+        self._verdict = verdict
+        self._witness_raises = witness_raises
         self.resolve_calls: list[Match | None] = []
+        self.witness_calls: list[Match] = []
 
     def resolve(self, track: Track, match: Match | None) -> Match | None:
         self.resolve_calls.append(match)
         if match is None or not self._album:
             return None
         return replace(match, album=self._album)
+
+    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+        self.witness_calls.append(match)
+        if self._witness_raises:
+            raise RuntimeError("simulated Resolver failure")
+        return IdentityRuling(verdict=self._verdict, rationale=f"fake: {self._verdict}")
 
 
 class FakeTagWriter:

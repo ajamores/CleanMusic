@@ -1,16 +1,17 @@
-"""Observation harness — records the real gate signal #16 and #17 need to unpark.
+"""Observation harness — records the real identification signal for #16/#17/#38.
 
-Both tickets are blocked on *operational data*, not code: the Confidence gate's
-0.9 uploader-only bar (#16) and the question of whether a Resolver-proposed album
-should ever verify (#17) can only be settled against real fingerprint confidence
-and real Resolver behaviour, observed in live runs. The offline suite fakes both,
-so it cannot supply the distribution.
+It began as the data-gathering run that unparked #16 and #17 (the finding that
+real Shazam confidence is binary lives in `docs/LEARNINGS.md`). It now also
+records the identity witness that resolved them (#38, ADR-0006): whether the gate
+took the corroborated fast path or consulted the witness, and what verdict the
+witness returned. The offline suite fakes all of this, so only a live run shows
+the real distribution.
 
 This drives a real batch (real Shazam Fingerprinter, real Haiku Resolver) and,
 without changing engine behaviour, writes one JSONL row per Track capturing what
-the pipeline computed but never emits: the fingerprint confidence, the gate's own
-verdict broken down (title agreement, artist corroboration, uploader-only,
-confident-enough), and whether the Resolver was reached and what it proposed.
+the pipeline computed but never emits: the fingerprint result, the gate breakdown
+(title agreement, artist corroboration, fast path vs. witness path), whether the
+album Resolver was reached and what it proposed, and the identity witness verdict.
 
 The two providers are wrapped in thin *recording* seams that log then delegate;
 the gate breakdown is recomputed from ``muzik.engine``'s own pure helpers, so the
@@ -26,10 +27,11 @@ import argparse
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from muzik.domain import Match, Source, Track
+from muzik.domain import IdentityRuling, Match, Source, Track
 from muzik.engine import (
     Providers,
     _agrees,
@@ -37,7 +39,6 @@ from muzik.engine import (
     _identity_tokens,
     _normalise_uploader,
     _source_artist,
-    _UPLOADER_ONLY_MIN_CONFIDENCE,
     run,
 )
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
@@ -60,6 +61,14 @@ class _Record:
     resolver_reached: bool = False
     #: The album the Resolver proposed, or None when it declined (or was not reached).
     resolver_album: str | None = None
+    #: True once the identity witness ran for this Track (#38 — the gate reached the
+    #: uncorroborated path). False means the fast path verified or contradicted it.
+    witness_reached: bool = False
+    #: The witness's verdict when it ran, else None.
+    witness_verdict: str | None = None
+    #: Wall-clock of the witness call (ms) — the added per-uncorroborated-Track cost
+    #: the #38 acceptance asks to measure. None when the witness never ran.
+    witness_ms: float | None = None
 
 
 class _Sink:
@@ -85,6 +94,15 @@ class _Sink:
                 return
             record.resolver_reached = True
             record.resolver_album = proposed.album if proposed is not None else None
+
+    def note_witness(self, track: Track, ruling: IdentityRuling, elapsed_ms: float) -> None:
+        with self._lock:
+            record = self._records.get(track.source_url)
+            if record is None:  # defensive: identify always runs first
+                return
+            record.witness_reached = True
+            record.witness_verdict = ruling.verdict
+            record.witness_ms = elapsed_ms
 
     def get(self, source_url: str) -> _Record | None:
         return self._records.get(source_url)
@@ -117,32 +135,44 @@ class _RecordingResolver:
         self._sink.note_resolver(track, proposed)
         return proposed
 
+    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+        t0 = time.perf_counter()
+        ruling = self._inner.witness_identity(track, match)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        self._sink.note_witness(track, ruling, elapsed_ms)
+        return ruling
+
 
 def _gate_breakdown(track: Track, match: Match) -> dict:
-    """Recompute the Confidence gate's verdict from the engine's own helpers.
+    """Recompute the Confidence gate's structure from the engine's own helpers.
 
-    Mirrors ``_confidence_gate`` exactly (imported helpers, same order), so the row
-    reports the real decision rather than a re-implementation that could drift.
+    Mirrors ``_confidence_gate`` (ADR-0006): the fast path verifies when the
+    Source's own title corroborates both title and artist; otherwise, when the
+    title echoes the Match but names no artist of its own, the identity witness is
+    consulted (``consults_witness``). Reports the branch, not the final verdict —
+    the witness's ruling and the final outcome are recorded separately.
     """
     uploader_artist = _normalise_uploader(track.uploader)
     source_artist = _source_artist(track.source_title)
     title_witness = _identity_tokens(source_artist)
     witness = title_witness | _identity_tokens(uploader_artist)
     title_agrees = _agrees(match, track.source_title)
+    corroborated_by_title = _artist_corroborates(match, title_witness)
     artist_corroborated = _artist_corroborates(match, witness)
-    uploader_only = artist_corroborated and not _artist_corroborates(match, title_witness)
-    confident_enough = (
-        not uploader_only or match.confidence >= _UPLOADER_ONLY_MIN_CONFIDENCE
-    )
-    verified = title_agrees and artist_corroborated and confident_enough
+    uploader_only = artist_corroborated and not corroborated_by_title
+    corroborated_fast_path = title_agrees and corroborated_by_title
+    consults_witness = title_agrees and not title_witness
     return {
         "source_artist": source_artist,
         "uploader_artist": uploader_artist,
         "title_agrees": title_agrees,
         "artist_corroborated": artist_corroborated,
+        "corroborated_by_title": corroborated_by_title,
         "uploader_only": uploader_only,
-        "confident_enough": confident_enough,
-        "verified": verified,
+        # The fast, AI-free verify path (the common case, #38).
+        "corroborated_fast_path": corroborated_fast_path,
+        # The uncorroborated path where the identity witness is consulted.
+        "consults_witness": consults_witness,
     }
 
 
@@ -176,6 +206,11 @@ def _row(result, record: _Record | None) -> dict:
             "proposed_album": record.resolver_album,
             "declined": record.resolver_reached and record.resolver_album is None,
         }
+        row["witness"] = {
+            "reached": record.witness_reached,
+            "verdict": record.witness_verdict,
+            "ms": round(record.witness_ms, 1) if record.witness_ms is not None else None,
+        }
     if result.tags is not None:
         row["final_tags"] = {
             "artist": result.tags.artist,
@@ -186,36 +221,52 @@ def _row(result, record: _Record | None) -> dict:
     return row
 
 
-def _summarize(rows: list[dict]) -> str:
+def _summarize(rows: list[dict], run_seconds: float) -> str:
     """A short human-readable tally over the rows — the shape of the distribution."""
     matched = [r for r in rows if r["matched"]]
-    confidences = sorted(r["fingerprint"]["confidence"] for r in matched)
     verified = sum(1 for r in rows if r["final_verified"])
-    uploader_only = sum(1 for r in matched if r["gate"]["uploader_only"])
+    fast_path = sum(1 for r in matched if r["gate"]["corroborated_fast_path"])
+    consults = sum(1 for r in matched if r["gate"]["consults_witness"])
     resolver_reached = sum(1 for r in rows if r.get("resolver", {}).get("reached"))
     resolver_declined = sum(1 for r in rows if r.get("resolver", {}).get("declined"))
     resolver_proposed = resolver_reached - resolver_declined
+    witness_reached = sum(1 for r in rows if r.get("witness", {}).get("reached"))
 
-    def _band(lo: float, hi: float) -> int:
-        return sum(1 for c in confidences if lo <= c < hi)
+    def _verdict(name: str) -> int:
+        return sum(1 for r in rows if r.get("witness", {}).get("verdict") == name)
+
+    # The added AI cost the #38 acceptance asks to measure: per-witnessed-Track and
+    # the whole-run wall-clock. Fast-path Tracks contribute nothing (no witness call).
+    witness_ms = [r["witness"]["ms"] for r in rows if r.get("witness", {}).get("ms") is not None]
+    avg_witness = f"{sum(witness_ms) / len(witness_ms):.0f} ms" if witness_ms else "n/a"
+    total_witness = f"{sum(witness_ms) / 1000:.1f} s" if witness_ms else "0 s"
 
     lines = [
-        f"Tracks observed:        {len(rows)}",
-        f"  fingerprint matched:  {len(matched)}",
-        f"  finally verified:     {verified}",
-        f"  routed to review:     {len(rows) - verified}",
+        f"Tracks observed:            {len(rows)}",
+        f"  fingerprint matched:      {len(matched)}",
+        f"  finally verified:         {verified}",
+        f"  routed to review:         {len(rows) - verified}",
         "",
-        "Fingerprint confidence (matched Tracks) — the #16 distribution:",
-        f"  min / max:            "
-        + (f"{confidences[0]:.3f} / {confidences[-1]:.3f}" if confidences else "n/a"),
-        f"  [0.00,0.90):          {_band(0.0, 0.9)}",
-        f"  [0.90,1.00]:          {_band(0.9, 1.0001)}",
-        f"  uploader-only Matches:{uploader_only}   (the path the 0.9 bar guards)",
+        "Confidence gate paths (matched Tracks) — ADR-0006:",
+        f"  corroborated fast path:   {fast_path}   (verified, no AI call)",
+        f"  consulted the witness:    {consults}   (the uncorroborated path)",
         "",
-        "Resolver behaviour — the #17 signal:",
+        "Identity witness — the #16/#17 signal (#38):",
+        f"  reached:                  {witness_reached}",
+        f"  consistent:               {_verdict('consistent')}",
+        f"  inconsistent:             {_verdict('inconsistent')}",
+        f"  unsure:                   {_verdict('unsure')}",
+        "",
+        "Speed — the #38 acceptance measurement:",
+        f"  whole-run wall-clock:     {run_seconds:.1f} s",
+        f"  witness calls made:       {len(witness_ms)}",
+        f"  avg per witnessed Track:  {avg_witness}",
+        f"  total witness time:       {total_witness}   (the added AI cost this run)",
+        "",
+        "Album Resolver behaviour:",
         f"  reached (album unresolved after catalogs): {resolver_reached}",
-        f"  proposed an album:    {resolver_proposed}",
-        f"  declined (null):      {resolver_declined}",
+        f"  proposed an album:        {resolver_proposed}",
+        f"  declined (null):          {resolver_declined}",
     ]
     return "\n".join(lines)
 
@@ -275,7 +326,9 @@ def main() -> int:
     sink = _Sink()
     providers = _build_providers(sink, args.out, expand_playlist=not args.single)
 
+    started = time.perf_counter()
     results = run(Source(url=args.url), providers, concurrency=args.concurrency)
+    run_seconds = time.perf_counter() - started
 
     rows = [_row(result, sink.get(result.source_url)) for result in results]
     out_path = args.out / "observations.jsonl"
@@ -283,7 +336,7 @@ def main() -> int:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    print(_summarize(rows))
+    print(_summarize(rows, run_seconds))
     print(f"\nrows written: {out_path}")
     return 0
 

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from muzik.domain import (
+    IdentityVerdict,
     Match,
     MatchConflict,
     PlaylistEntry,
@@ -180,7 +181,7 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     if match is None:
         return _review(track, "no fingerprint match")
     tags = _album_waterfall(track, match, providers)
-    tags, reason, conflict = _confidence_gate(track, match, tags)
+    tags, reason, conflict = _confidence_gate(track, match, tags, providers.resolver)
     output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
@@ -390,24 +391,27 @@ def _album_waterfall(track: Track, match: Match, providers: Providers) -> Tags:
     return tags
 
 
-# --- Confidence gate (ADR-0002, ticket #5) -------------------------------------
+# --- Confidence gate (ADR-0002, ticket #5; identity witness, #38 / ADR-0006) ---
 #
-# The gate guards against a confident-wrong Match by cross-checking it against
-# the Source's own title. It runs only on the matched path (a Track with no
-# Match is routed to the Review queue upstream). Three outcomes:
+# The gate guards against a confident-wrong Match. It runs only on the matched
+# path (a Track with no Match is routed to the Review queue upstream). Outcomes:
 #
-#   * Agreement  — the Source title echoes the Match  -> verified Tags, no marker.
-#                  Caveat (#14): when only the uploader (a channel name anyone can
-#                  set) backs the artist, verification also needs a confident Match;
-#                  a low-confidence, channel-only Match is kept unverified instead.
-#   * Disagreement — the Source title names a different "Artist - Title"
-#                    -> best-effort provisional Tags parsed from the Source,
-#                       marked unverified (`verified=False`). The Match is never
-#                       written as truth.
-#   * No signal  — the Source title carries no usable identity (empty, or no
-#                  "Artist - Title" to contradict with) -> the Match cannot be
-#                  confirmed *or* contradicted, so it is kept but left
-#                  unverified, pending review.
+#   * Corroborated — the Source's own title echoes the Match on BOTH its title and
+#                    its artist -> verified Tags, no marker, and NO AI call. This
+#                    is the common case, kept off the AI path for speed (#38).
+#   * Uncorroborated-but-not-contradicted — the title echoes the Match, but the
+#                    Source names no artist of its own to back it (the artist rests
+#                    only on the channel, or on nothing). Shazam confidence is
+#                    binary (docs/LEARNINGS.md), so there is no bar to lean on;
+#                    instead the Resolver rules on identity over the full evidence
+#                    (fingerprint + title/channel/description/tags/thumbnail,
+#                    ADR-0006). `consistent` -> verified; `inconsistent`/`unsure`
+#                    -> kept unverified, Review. A witness failure/timeout degrades
+#                    to `unsure` (ADR-0002: the batch never blocks).
+#   * Contradicted — the Source names a different "Artist - Title", or its own
+#                    artist names someone else -> best-effort provisional Tags
+#                    parsed from the Source, unverified. No AI call: the Source
+#                    actively disagrees, which a witness can't overturn.
 #
 # The "unverified" marker reuses the existing `Tags.verified` bool: True means
 # confirmed, False means provisional/unreviewed. No new field is needed.
@@ -475,15 +479,6 @@ def _artist_corroborates(match: Match, witness_tokens: set[str]) -> bool:
     return artist_tokens <= witness_tokens
 
 
-#: The confidence a Match must clear to be verified when the *only* artist
-#: witness is the uploader. The Source's own title is an independent witness a
-#: channel can't fake; the channel name is not — anyone can name a channel after
-#: an artist. So a Match backed solely by the channel must also be one the
-#: fingerprinter is sure of, or an impersonator channel confirms a wrong Match
-#: (#14 / ADR-0003). Below the bar the Match is kept but left unverified.
-_UPLOADER_ONLY_MIN_CONFIDENCE = 0.9
-
-
 #: YouTube's auto-generated artist channels ("Rick Astley - Topic") and label
 #: channels ("RickAstleyVEVO") dress the artist name; strip the dressing so the
 #: bare artist is left ("Rick Astley").
@@ -514,44 +509,65 @@ def _provisional_from_source(source_title: str, fallback_artist: str) -> Tags | 
 
 
 def _confidence_gate(
-    track: Track, match: Match, tags: Tags
+    track: Track, match: Match, tags: Tags, resolver: Resolver
 ) -> tuple[Tags, str | None, MatchConflict | None]:
-    """Confirm the Match against the Source title, or fall back to provisional.
+    """Confirm the Match against the Source, or fall back to provisional.
 
     Returns the Tags to write, a Review-queue reason (``None`` only when the Match
     is verified), and — on a provisional outcome — a ``MatchConflict`` recording
-    the rejected Match and the witnesses it failed against (#24). The Match is
-    verified only when the Source corroborates it on **both** its title and its
-    artist (ADR-0002 / #11); title agreement alone accepted a confident-wrong
-    Match whenever the title was a common word.
+    the rejected Match and the witnesses it failed against (#24).
 
-    Only what the gate *reports* widened here — the verify/provisional decision is
-    unchanged.
+    Three paths (see the header comment). The Match is verified outright only when
+    the Source's own title corroborates it on **both** title and artist — a witness
+    a channel can't fake, and the common case, so it takes no AI call (#38). When
+    the title echoes the Match but the Source names no artist of its own, the
+    identity rests on the channel (assertable) or nothing; there the Resolver is
+    consulted as an independent identity witness (ADR-0006), replacing the retired
+    confidence bar (Shazam confidence is binary — docs/LEARNINGS.md). An actively
+    contradicting Source is kept provisional without an AI call.
+    """
+    title_witness = _identity_tokens(_source_artist(track.source_title))
+    title_agrees = _agrees(match, track.source_title)
+    corroborated_by_title = _artist_corroborates(match, title_witness)
+
+    # Corroborated by the Source's own title (title + artist): verified, no AI.
+    if title_agrees and corroborated_by_title:
+        return replace(tags, verified=True), None, None
+
+    # Uncorroborated but not contradicted: the title echoes the Match, yet the
+    # Source names no artist of its own to independently back it. Consult the
+    # identity witness instead of the (now-retired) confidence bar (#38).
+    if title_agrees and not title_witness:
+        verdict = _identity_verdict(track, match, resolver)
+        if verdict == "consistent":
+            return replace(tags, verified=True), None, None
+        return _unverified(tags, track, match, verdict)
+
+    # Contradicted, or the title doesn't echo the Match at all: never write the
+    # Match as truth — fall back to the Source's own identity, best-effort. No AI.
+    return _unverified(tags, track, match, None)
+
+
+def _unverified(
+    tags: Tags,
+    track: Track,
+    match: Match,
+    verdict: IdentityVerdict | None,
+) -> tuple[Tags, str, MatchConflict]:
+    """The provisional outcome: Source-parsed Tags, or the kept-but-unverified Match.
+
+    ``verdict`` is the identity witness's ruling when it was consulted (``None`` on
+    the contradicted path, where no witness ran) — it shapes only the explanation.
     """
     uploader_artist = _normalise_uploader(track.uploader)
-    source_artist = _source_artist(track.source_title)
-    title_witness = _identity_tokens(source_artist)
-    witness = title_witness | _identity_tokens(uploader_artist)
-    title_agrees = _agrees(match, track.source_title)
-    artist_corroborated = _artist_corroborates(match, witness)
-    # When the artist agreement rests *solely* on the uploader — the Source's own
-    # title does not vouch for it — the channel is the only witness, and a channel
-    # name is assertable, not evidence. Such a Match is verified only if the
-    # fingerprinter is also confident; otherwise it is kept, unverified (#14).
-    uploader_only = artist_corroborated and not _artist_corroborates(match, title_witness)
-    confident_enough = (
-        not uploader_only or match.confidence >= _UPLOADER_ONLY_MIN_CONFIDENCE
-    )
-    if title_agrees and artist_corroborated and confident_enough:
-        return replace(tags, verified=True), None, None
     conflict = MatchConflict(
         heard=match,
-        source_artist=source_artist,
+        source_artist=_source_artist(track.source_title),
         # The normalised channel — the artist witness the gate actually weighed
         # ("AdeleVEVO" → "Adele", "… - Topic" → ""). Storing the raw channel could
         # show a "video/channel says:" witness the ``why`` line calls absent.
         uploader=uploader_artist,
-        why=_conflict_why(source_artist, uploader_artist, title_agrees, artist_corroborated),
+        why=_conflict_why(match, track, verdict),
     )
     provisional = _provisional_from_source(track.source_title, uploader_artist)
     if provisional is not None:
@@ -560,30 +576,43 @@ def _confidence_gate(
             "unverified: provisional Tags from the Source, Match not corroborated",
             conflict,
         )
-    # No signal either way: keep the Match, but never stamp it verified.
-    return (
-        replace(tags, verified=False),
-        "unverified: no second witness to confirm the Match",
-        conflict,
-    )
+    # No usable Source identity: keep the Match, but never stamp it verified.
+    if verdict == "inconsistent":
+        reason = "unverified: the identity witness found the Match inconsistent with the Source"
+    else:
+        reason = "unverified: no independent witness to confirm the Match"
+    return replace(tags, verified=False), reason, conflict
 
 
-def _conflict_why(
-    source_artist: str, uploader_artist: str, title_agrees: bool, artist_corroborated: bool
-) -> str:
-    """A short line naming which witness failed the gate (#24).
+def _conflict_why(match: Match, track: Track, verdict: IdentityVerdict | None) -> str:
+    """A short line naming why the gate kept the Track provisional (#24).
 
-    Reads off the same checks the gate decided on: a title the Source doesn't echo,
-    an artist it contradicts, an absent artist witness, or (the remaining case) a
-    channel-only witness the fingerprint wasn't confident enough to trust.
+    A title the Source doesn't echo, an artist it contradicts, or — when the
+    identity witness was consulted — its ruling.
     """
-    if not title_agrees:
+    if not _agrees(match, track.source_title):
         return "title didn't match, kept provisional"
-    if not artist_corroborated:
-        if not source_artist and not uploader_artist:
-            return "no artist witness to confirm it, kept provisional"
-        return "artist didn't match, kept provisional"
-    return "only the channel backs the artist and the Match is uncertain, kept provisional"
+    if verdict == "inconsistent":
+        return "the identity witness ruled the Match inconsistent with the video, kept provisional"
+    if verdict == "unsure":
+        return "the identity witness couldn't confirm the Match, kept provisional"
+    if not _source_artist(track.source_title) and not _normalise_uploader(track.uploader):
+        return "no artist witness to confirm it, kept provisional"
+    return "artist didn't match, kept provisional"
+
+
+def _identity_verdict(track: Track, match: Match, resolver: Resolver) -> IdentityVerdict:
+    """Ask the Resolver to witness the Match's identity, degrading safely (ADR-0002).
+
+    Any failure or timeout in the AI call is treated as ``unsure`` — the Track
+    stays unverified and goes to Review, but the batch never blocks. (The real
+    Resolver also degrades internally; this is the belt-and-braces boundary so a
+    misbehaving provider can't abort a batch.)
+    """
+    try:
+        return resolver.witness_identity(track, match).verdict
+    except Exception:
+        return "unsure"
 
 
 def _write(track: Track, tags: Tags, providers: Providers) -> Path:

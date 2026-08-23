@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from muzik.domain import (
+    IdentityRuling,
     Match,
     PlaylistEntry,
     ReviewDecision,
@@ -80,12 +81,25 @@ class Authority(Protocol):
 
 
 class Resolver(Protocol):
-    """The AI step that reasons over a Track's evidence to propose an identity.
+    """The AI step that reasons over a Track's evidence (ADR-0006).
 
-    Injected now for its seam; not called on the skeleton's happy path.
+    Two distinct capabilities: ``resolve`` proposes a canonical *album* (the last
+    tier of the album waterfall, ADR-0002), and ``witness_identity`` rules on
+    whether the *fingerprint's identity* fits the Track's own evidence, so the
+    Confidence gate can verify on an independent witness rather than Shazam alone.
     """
 
     def resolve(self, track: Track, match: Match | None) -> Match | None: ...
+
+    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+        """Rule on whether ``match`` is consistent with the Track's own evidence.
+
+        Reasons over the fingerprint Match *and* the full download — title,
+        channel, description, tags, and thumbnail (a multimodal call) — and returns
+        an :class:`IdentityRuling`. Must degrade to an ``unsure`` verdict on any
+        failure or timeout rather than raise: a batch never blocks (ADR-0002).
+        """
+        ...
 
 
 class TagWriter(Protocol):
