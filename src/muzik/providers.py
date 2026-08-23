@@ -11,7 +11,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from muzik.domain import Match, ReviewDecision, ReviewItem, Source, Tags, Track
+from muzik.domain import (
+    Match,
+    PlaylistEntry,
+    ReviewDecision,
+    ReviewItem,
+    Source,
+    Tags,
+    Track,
+)
 
 
 class PlaylistInSingleModeError(Exception):
@@ -35,6 +43,12 @@ class Downloader(Protocol):
     #: rather than aborting the batch (ADR-0002); the engine drains this after
     #: download.
     skipped: list[tuple[str, str]]
+
+    #: The expanded playlist's own title, as yt-dlp classifies it (#25) — set only
+    #: when a ``--playlist`` run expanded a Source into a playlist, ``None`` in
+    #: single mode. The engine reads it after ``download`` to name the ``.m3u8`` it
+    #: writes for the run, never from Muzik-side URL parsing.
+    playlist_title: str | None
 
     def download(self, source: Source) -> list[Track]:
         """Download the Source's Tracks.
@@ -96,6 +110,32 @@ class ReviewQueue(Protocol):
 
     def replace_all(self, items: list[ReviewItem]) -> None:
         """Overwrite the queue with ``items`` — the survivors of a clear pass."""
+        ...
+
+
+class PlaylistWriter(Protocol):
+    """Writes one ``.m3u8`` preserving a ``--playlist`` run's grouping (#25).
+
+    A ``--playlist`` run's Tracks each carry their real album in their Tags; the
+    *grouping* (the monthly YouTube playlist they came from) has nowhere to live in
+    the files. This seam records it beside them as a plain playlist file a music
+    library imports, leaving the album Tags untouched. Interface-specific output —
+    a future web adapter would present the grouping differently — so it is a seam
+    the engine drives, not core pipeline logic.
+    """
+
+    #: The file the most recent ``write`` produced (``None`` if it wrote none). The
+    #: engine drives ``write`` but discards its return; the adapter reads the path
+    #: back here afterwards — the same post-call-state pattern as the Downloader's
+    #: ``skipped`` / ``archive_skips``.
+    last_written: Path | None
+
+    def write(self, title: str, entries: list[PlaylistEntry]) -> Path | None:
+        """Write the playlist named ``title`` listing ``entries``, in order.
+
+        Returns the file written, or ``None`` when there was nothing to write; the
+        same path is recorded on ``last_written`` for a driver that discards it.
+        """
         ...
 
 

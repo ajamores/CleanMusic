@@ -5,6 +5,7 @@ without a network, and tests the ``_conflict_lines`` renderer directly.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import muzik.cli as cli
 from muzik.domain import Match, MatchConflict, Tags, TrackResult
@@ -22,7 +23,11 @@ def _wire(monkeypatch, tmp_path, downloader, results):
     """Point ``main`` at a stub Downloader and a canned engine result list."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.setattr("muzik.cli._build_downloader", lambda *a, **k: downloader)
-    monkeypatch.setattr("muzik.cli._build_providers", lambda *a, **k: object())
+    # Only the fields ``main`` reads post-run: a writer that wrote no playlist here.
+    monkeypatch.setattr(
+        "muzik.cli._build_providers",
+        lambda *a, **k: SimpleNamespace(playlist_writer=SimpleNamespace(last_written=None)),
+    )
     monkeypatch.setattr("muzik.cli.run", lambda *a, **k: results)
     monkeypatch.setattr(
         "sys.argv", ["muzik", "https://youtu.be/x", "--out", str(tmp_path / "out")]

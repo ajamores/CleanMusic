@@ -46,6 +46,10 @@ class FakeDownloader:
         self._archive = download_archive
         #: ``(title, reason)`` for every entry skipped this batch.
         self.skipped: list[tuple[str, str]] = []
+        #: The expanded playlist's title (#25); the engine writes a ``.m3u8`` only
+        #: when it is set. Left None by default (single mode) — a test that exercises
+        #: playlist output sets it after construction.
+        self.playlist_title: str | None = None
 
     def download(self, source: Source) -> list[Track]:
         tracks: list[Track] = []

@@ -27,6 +27,9 @@ class Track:
     #: The Source's uploader/channel — the gate's artist witness and the
     #: provisional fallback artist when the title carries no "Artist -" (#11).
     uploader: str = ""
+    #: Runtime in whole seconds, as yt-dlp reports it, for the ``#EXTINF`` line of a
+    #: ``--playlist`` run's ``.m3u8`` (#25). None when yt-dlp gives no duration.
+    duration: int | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,22 @@ class ReviewItem:
     #: The rejected-Match conflict, carried through so the ``--review`` clear pass
     #: renders the same explanation the batch did (#24). None when there is none.
     conflict: MatchConflict | None = None
+
+
+@dataclass(frozen=True)
+class PlaylistEntry:
+    """One landed Track's line in a ``--playlist`` run's ``.m3u8`` (#25).
+
+    Carries exactly what an extended-M3U entry needs: the runtime for ``#EXTINF``
+    (None → ``-1``), the ``Artist``/``Title`` for its display half (from the Track's
+    written Tags), and the file the entry points at. The writer turns ``path`` into a
+    path relative to the playlist file's own folder, so moving the folder is safe.
+    """
+
+    duration: int | None
+    artist: str
+    title: str
+    path: Path
 
 
 @dataclass(frozen=True)

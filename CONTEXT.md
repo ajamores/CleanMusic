@@ -45,3 +45,7 @@ _Avoid_: metadata, ID3
 **Review queue**:
 The set of Tracks whose Identification was too uncertain to auto-tag. It fills during a batch and the user clears it in one pass after the batch completes — the batch itself never blocks.
 _Avoid_: pending list, errors, failures
+
+**Playlist file**:
+The `.m3u8` written beside a `--playlist` run's Tracks, preserving the *grouping* — the monthly YouTube playlist those Tracks came from — as a plain list of relative paths a music library imports. It lives beside the Tracks, never in them: a Track's album Tag is its real album, so the grouping is kept separate (ADR-0005).
+_Avoid_: m3u, list (as a noun for this file), grouping folder

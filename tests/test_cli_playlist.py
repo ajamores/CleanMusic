@@ -39,6 +39,29 @@ def test_playlist_flag_is_not_persisted(tmp_path, monkeypatch):
     assert load_settings().output_format is OutputFormat.M4A
 
 
+def test_cli_reports_where_the_playlist_landed(tmp_path, monkeypatch, capsys):
+    # After a --playlist run, the CLI tells the user where the .m3u8 landed (#25),
+    # reading it off the writer the engine drove.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    out = tmp_path / "out"
+
+    def _run(source, providers, **kwargs):
+        # Stand in for the engine driving the writer during the batch.
+        providers.playlist_writer.last_written = out / "Aug 2026.m3u8"
+        return []
+
+    monkeypatch.setattr("muzik.cli.run", _run)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["muzik", "https://youtube.com/playlist?list=PL", "--playlist", "--out", str(out)],
+    )
+
+    assert main() == 0
+    printed = capsys.readouterr().out
+    assert "playlist" in printed
+    assert "Aug 2026.m3u8" in printed
+
+
 def test_a_refused_bare_playlist_is_reported_and_runs_no_pipeline(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 

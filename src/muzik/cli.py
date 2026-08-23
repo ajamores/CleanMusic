@@ -22,6 +22,7 @@ from muzik.providers import PlaylistInSingleModeError, Resolver
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
+from muzik.real.playlist import M3u8PlaylistWriter
 from muzik.real.resolver import HaikuResolver
 from muzik.real.review_queue import JsonReviewQueue
 from muzik.real.tagwriter import Mp3TagWriter, Mp4TagWriter
@@ -84,6 +85,9 @@ def _build_providers(
         resolver=_build_resolver(),
         tagwriter=tagwriter,
         review_queue=JsonReviewQueue(out_dir / "review-queue.jsonl"),
+        # Writes a .m3u8 only on a --playlist expansion (#25); a single-mode run
+        # leaves the Downloader's playlist_title None, so the engine calls it not.
+        playlist_writer=M3u8PlaylistWriter(out_dir),
     )
 
 
@@ -286,6 +290,10 @@ def main() -> int:
     # explicitly, so an all-archived Source reads as "done", not a silent failure.
     for source_url in downloader.archive_skips:
         print(f"already downloaded — nothing new for {source_url}")
+
+    # A --playlist run records the grouping as one .m3u8 (#25); say where it landed.
+    if providers.playlist_writer.last_written is not None:
+        print(f"playlist  {providers.playlist_writer.last_written}")
 
     summary = summarize(results, len(downloader.skipped))
     print(f"\n{summary.verified} verified, {summary.queued} queued for review")
