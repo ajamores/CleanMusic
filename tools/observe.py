@@ -146,11 +146,13 @@ class _RecordingResolver:
 def _gate_breakdown(track: Track, match: Match) -> dict:
     """Recompute the Confidence gate's structure from the engine's own helpers.
 
-    Mirrors ``_confidence_gate`` (ADR-0006): the fast path verifies when the
-    Source's own title corroborates both title and artist; otherwise, when the
-    title echoes the Match but names no artist of its own, the identity witness is
-    consulted (``consults_witness``). Reports the branch, not the final verdict —
-    the witness's ruling and the final outcome are recorded separately.
+    Mirrors ``_confidence_gate`` (ADR-0006, #42): the fast path verifies when the
+    Source's own title corroborates both title and artist; otherwise, whenever the
+    title echoes the Match but its own title doesn't corroborate the artist — no
+    artist witness, or a parse that may be reversed/dressed — the identity witness
+    is consulted (``consults_witness``). Only a title *disagreement* skips it.
+    Reports the branch, not the final verdict — the witness's ruling and the final
+    outcome are recorded separately.
     """
     uploader_artist = _normalise_uploader(track.uploader)
     source_artist = _source_artist(track.source_title)
@@ -161,7 +163,7 @@ def _gate_breakdown(track: Track, match: Match) -> dict:
     artist_corroborated = _artist_corroborates(match, witness)
     uploader_only = artist_corroborated and not corroborated_by_title
     corroborated_fast_path = title_agrees and corroborated_by_title
-    consults_witness = title_agrees and not title_witness
+    consults_witness = title_agrees and not corroborated_by_title
     return {
         "source_artist": source_artist,
         "uploader_artist": uploader_artist,

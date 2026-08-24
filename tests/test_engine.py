@@ -154,9 +154,10 @@ def test_confidence_gate_falls_back_to_the_uploader_for_a_titleless_artist():
 def test_confidence_gate_rejects_a_match_whose_artist_contradicts_the_source():
     # The single-word-title false-accept: a Match title ("Love") that the Source
     # title happens to echo, but by a *different* artist. Title agreement alone
-    # is not enough — the Source names "Adele", the Match claims "Lana Del Rey",
-    # so the Match must NOT be stamped verified. The Source's own identity is
-    # written instead, provisional and unverified.
+    # is not enough — the Source names "Adele", the Match claims "Lana Del Rey".
+    # The title's own parse doesn't corroborate the artist, so the witness is now
+    # consulted (#42); it rules `inconsistent`, so the Match must NOT be stamped
+    # verified. The Source's own identity is written instead, provisional.
     match = Match(
         title="Love",
         artist="Lana Del Rey",
@@ -165,14 +166,22 @@ def test_confidence_gate_rejects_a_match_whose_artist_contradicts_the_source():
         confidence=0.99,
     )
     writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="inconsistent")
     results = run(
         Source(url="https://youtu.be/abc"),
-        _providers(match, writer, source_title="Adele - Love (Official Audio)"),
+        _providers(
+            match,
+            writer,
+            source_title="Adele - Love (Official Audio)",
+            resolver=resolver,
+        ),
     )
 
     result = results[0]
     assert result.tags is not None
-    # Title agreed, but the artist contradicts → not verified.
+    # The witness was consulted on this apparent contradiction (#42).
+    assert resolver.witness_calls == [match]
+    # Witness dissented → not verified.
     assert result.tags.verified is False
     assert result.tags.artist != "Lana Del Rey"
     # The Source's own artist/title is written, best-effort.
@@ -180,6 +189,73 @@ def test_confidence_gate_rejects_a_match_whose_artist_contradicts_the_source():
     assert result.tags.title == "Love"
     # The wrong Match's art is not carried onto an unverified Track.
     assert result.tags.cover_art is None
+
+
+def test_confidence_gate_verifies_a_reversed_source_title_via_the_witness():
+    # #42, the track-11 shape (playlist PLBLcoq9Bb-FU): the Source names the song
+    # and artist in *reversed* order — "Buscando La Verdad - Ricky Campanelli" — so
+    # the dumb "Artist - Title" split reads the song ("Buscando La Verdad") as the
+    # artist. The title agrees but that parse doesn't corroborate the fingerprint's
+    # artist ("Dj Ricky Campanelli", also carrying a "Dj" prefix), so the witness is
+    # consulted. It reads the whole video, rules `consistent`, and the Track verifies
+    # with the FINGERPRINT's identity — never the reversed Source parse.
+    match = Match(
+        title="Buscando La Verdad",
+        artist="Dj Ricky Campanelli",
+        album="Buscando La Verdad",
+        cover_art=b"JPEGBYTES",
+        confidence=1.0,
+    )
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/t11"),
+        _providers(
+            match,
+            writer,
+            source_title="BUSCANDO LA VERDAD - RICKY CAMPANELLI & JIMMY BOSCH (2018)",
+            uploader="YAMI PERLAZA III",
+            resolver=resolver,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    # The witness was consulted on the apparent (but false) contradiction.
+    assert resolver.witness_calls == [match]
+    # Verified with the fingerprint's tags, NOT the reversed "Artist - Title" parse.
+    assert result.tags.verified is True
+    assert result.tags.artist == "Dj Ricky Campanelli"
+    assert result.tags.title == "Buscando La Verdad"
+    assert result.tags.cover_art == b"JPEGBYTES"
+
+
+def test_confidence_gate_never_consults_the_witness_on_a_title_disagreement():
+    # #42 (speed): a genuine contradiction — the Source's title names a *different*
+    # recording than the Match — must stay off the AI path, so the added witness cost
+    # stays bounded (#38). No witness call; the Source's own identity is written.
+    match = Match(
+        title="Envy", artist="Ogi", album="Monologues", cover_art=b"ART", confidence=1.0
+    )
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")  # would verify — must not be asked
+    results = run(
+        Source(url="https://youtu.be/dis"),
+        _providers(
+            match,
+            writer,
+            source_title="Rick Astley - Never Gonna Give You Up",
+            resolver=resolver,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    # The title disagreed outright — no AI call.
+    assert resolver.witness_calls == []
+    assert result.tags.verified is False
+    assert result.tags.artist == "Rick Astley"
+    assert result.tags.title == "Never Gonna Give You Up"
 
 
 def test_confidence_gate_verifies_when_the_uploader_supplies_the_artist():
@@ -368,6 +444,7 @@ def test_a_provisional_track_carries_the_rejected_match_conflict():
     # with, so the output can show the conflict rather than a lone terse reason.
     match = Match(title="Drift Away", artist="Dobie Gray", album="Drift Away", confidence=0.62)
     writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="inconsistent")  # the witness settles the clash (#42)
     results = run(
         Source(url="https://youtu.be/x"),
         _providers(
@@ -375,6 +452,7 @@ def test_a_provisional_track_carries_the_rejected_match_conflict():
             writer,
             source_title="Ab-Soul - Drift Away",
             uploader="Top Dawg Entertainment",
+            resolver=resolver,
         ),
     )
 
@@ -389,7 +467,8 @@ def test_a_provisional_track_carries_the_rejected_match_conflict():
     # The Source witnesses it conflicted with.
     assert conflict.source_artist == "Ab-Soul"
     assert conflict.uploader == "Top Dawg Entertainment"
-    assert "artist" in conflict.why
+    # The why now names the witness's ruling, not a mechanical artist mismatch (#42).
+    assert "witness" in conflict.why
 
 
 def test_a_verified_track_carries_no_conflict():
