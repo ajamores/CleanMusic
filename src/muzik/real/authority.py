@@ -44,27 +44,57 @@ class ShazamOwnAuthority:
         of crashing. A "studio album" is an ``official`` release whose release-group
         is a primary-type ``Album`` with no secondary types (which excludes
         compilations, live albums, soundtracks, remixes, and DJ-mixes).
+
+        Two lookups, because the ISRC entity can't carry release-groups (#45):
+        MusicBrainz's ISRC query only accepts ``artists``/``releases``/``isrcs`` as
+        includes, so its releases arrive with no ``release-group`` to filter on. So
+        the ISRC resolves the recording id, then a single ``browse_releases`` for
+        that recording pulls its official album releases *with* their release-groups
+        embedded — one extra call, not one per release. musicbrainzngs throttles
+        both to MusicBrainz's ~1 request/second on its own.
         """
         if not isrc:
             return None
         try:
-            result = musicbrainzngs.get_recordings_by_isrc(
-                isrc,
-                includes=["releases"],
-                release_type=["album"],
-                release_status=["official"],
-            )
+            result = musicbrainzngs.get_recordings_by_isrc(isrc)
         except musicbrainzngs.WebServiceError:
             return None
 
         recordings = result.get("isrc", {}).get("recording-list", [])
         for recording in recordings:
-            for release in recording.get("release-list", []):
-                group = release.get("release-group", {})
-                primary = (group.get("primary-type") or group.get("type") or "").lower()
-                secondary = group.get("secondary-type-list") or []
-                if primary == "album" and not secondary:
-                    return group.get("title") or release.get("title")
+            recording_id = recording.get("id")
+            if not recording_id:
+                continue  # a recording with no id is a miss, not a crash
+            album = self._studio_album_for_recording(recording_id)
+            if album is not None:
+                return album
+        return None
+
+    def _studio_album_for_recording(self, recording_id: str) -> str | None:
+        """The first studio album among a recording's official album releases, or
+        None. Browses releases *with* release-groups so the studio-album filter has
+        the primary/secondary types the ISRC lookup can't provide (#45)."""
+        try:
+            # 100 is MusicBrainz's max page. Not paginated deliberately: after the
+            # official-album filter a single recording having >100 album releases is
+            # not a real case, and each extra page is another rate-limited round-trip
+            # against a speed-sensitive path — so cap rather than walk every page.
+            result = musicbrainzngs.browse_releases(
+                recording=recording_id,
+                includes=["release-groups"],
+                release_type=["album"],
+                release_status=["official"],
+                limit=100,
+            )
+        except musicbrainzngs.WebServiceError:
+            return None
+
+        for release in result.get("release-list", []):
+            group = release.get("release-group", {})
+            primary = (group.get("primary-type") or group.get("type") or "").lower()
+            secondary = group.get("secondary-type-list") or []
+            if primary == "album" and not secondary:
+                return group.get("title") or release.get("title")
         return None
 
 
