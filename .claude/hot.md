@@ -12,37 +12,32 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** (title/artist/album/art) into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script). Core engine + CLI now, web later. Real providers built and wired in `cli.py`: yt-dlp download, **Shazam** fingerprint (`shazamio`), **MusicBrainz** album-by-ISRC, **Haiku** Resolver, MP3/M4A tag writers, JSON review queue. Identity comes from the audio fingerprint; fakes are test doubles for whole-box tests.
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script); core engine + CLI now, web later. Real providers wired in `cli.py`: yt-dlp, **Shazam** fingerprint, **MusicBrainz** album-by-ISRC, **Haiku** Resolver, MP3/M4A writers, JSON review queue. Identity comes from the fingerprint; the Resolver is the **identity witness** the gate verifies on (ADR-0006).
 
 ## Current State (2026-08-23)
 
-- `main` HEAD `c84827a`, clean. Core pipeline complete and live-verified: download → fingerprint → album waterfall (Shazam → MusicBrainz-by-ISRC → Resolver) → Confidence gate → tag or Review queue. #4/#7/#8/#22/#24/#25 all merged.
-- **This session's landings:** #37 shipped (`PR #39`) — the Track now captures the Source's **description, tags, and thumbnail URL** (`domain.py` + `downloader._track_from_entry`), the gating prerequisite for #38. Pure capture, inert: nothing consumes the fields yet. Earlier: #32 fix (`PR #34`), `tools/observe.py` (`PR #35`), ADR-0006 accepted (`PR #36`).
-- **deno installed** and on PATH (`~/.bashrc`) — the smoke suite (`pytest -m smoke`) now runs instead of skipping; offline suite 132 green.
+- **On branch `42-witness-when-title-agrees`, PR #44 open (awaiting merge/review).** Working tree clean. `main` HEAD `611d424` (#41).
+- **#42 built + live-verified.** Confidence gate now consults the identity witness on **every** title-agreeing-but-not-title-corroborated Match (not just the no-artist-witness case) — catches reversed "Song - Artist" titles, "Dj" prefixes, artist-across-the-dash. `consistent` → verified with the fingerprint's Tags, never the reversed Source parse; title *disagreements* stay off the AI path (speed, #38). Dropped two now-dead `_conflict_why` branches; synced `observe.py`'s `consults_witness` diagnostic to the new predicate.
+- **Live proof (`tools/observe.py` on `PLBLcoq9Bb-FU`):** track 11 ("Buscando La Verdad - Ricky Campanelli", fingerprint "Dj Ricky Campanelli") now **verifies** with the fingerprint's Tags. Speed: +1 witness call on the 14-track run, ~1.9 s on a 101 s run. Offline suite 147 green (3 smoke deselected).
+- **Ticket frontier is empty** of `ready-for-agent` work: only #42 (this PR) and #1 (master spec) remain open. The #16/#17/#38 epic is fully shipped.
 
-## The big decision this session (ADR-0006, Accepted)
+## Where to next
 
-**Identity today rests on Shazam alone**, spot-checked only against the Source title/channel; MusicBrainz + Resolver touch only the *album*. An observation run (`tools/observe.py`, 14-track playlist) proved **real Shazam confidence is binary** — every match is hard-coded `1.0` (`fingerprinter.py`), so the `0.9` uploader-only bar (#16) can never fire. Also: the download discards description/tags/thumbnail (only title/channel/duration survive), so the "AI reasons over all evidence" vision in `CONTEXT.md` is unbuilt.
-
-**Decided (option 3):** the Resolver becomes an **identity witness** — reasons over fingerprint + full download + thumbnail, rules consistent/inconsistent/can't-tell, and the gate verifies on that verdict. Recorded in `docs/adr/0006-identity-evidence-combination.md` (the spec) and `docs/LEARNINGS.md` (the binary-confidence lesson).
-
-## What's next — pick up here
-
-- **#38** — *Resolver becomes an identity witness; gate verifies on its verdict.* The epic that closes #16 + #17. `ready-for-agent`, **now unblocked** (#37 landed). **Start here:** `/implement 38`.
-  - **Speed is a hard requirement** (Armand, this session): the identity-witness AI call must NOT slow the common case. Fire the Resolver verdict **only on the uncorroborated path** — a title-corroborated Track still verifies with no AI call. **Measure wall-clock before/after** (baseline via `tools/observe.py` on a known playlist) and report the delta; bound the call with a timeout that degrades to `can't tell`→Review (ADR-0002). Requirement is pinned as a comment on #38 and in memory (`pipeline-speed-sensitive`).
-- #16 / #17 kept open for reference, off the frontier (commented, `ready-for-agent` removed); #38 closes them when built.
+- **Merge PR #44**, then the queue is dry. Next work must be **generated**, not picked up — an on-ramp, not `/implement`:
+  - `/triage` if bug reports / requests have piled up (things not self-authored),
+  - `/improve-codebase-architecture` for upkeep,
+  - `/grill-with-docs` for a new Muzik idea (web UI, batch-review UX).
+- Decide that door in a **fresh session** — don't spend #42's context on it.
 
 ## Recent sessions (rolling — last 2–3)
 
-- **2026-08-23 (#37)** — Implemented + merged #37 (`PR #39`): Track captures the Source's description/tags/thumbnail URL. Thumbnail carried as URL, not bytes (pure capture, no new network I/O; #38 fetches bytes on demand). Two-axis review clean. Unblocks #38; Armand flagged pipeline speed as a hard requirement for #38's AI call.
-- **2026-08-23** — Implemented #32 (archive-skip abort fix, `PR #34`). Then a design thread: built `tools/observe.py`, ran it on a real 14-track playlist, found Shazam confidence is binary → #16's threshold premise is dead. Drafted + accepted ADR-0006 (Resolver as identity witness). Cut tickets #37 (prereq) + #38 (epic); re-pointed #16/#17. Installed deno.
-- **2026-08-21 (#22)** — Single-Track-by-default + `--playlist` opt-in + bare-playlist refusal (`PlaylistInSingleModeError`, yt-dlp pre-flight). Merged; unblocked #25.
-- **2026-08-21** — Live sanity-check + triage; filed #24 (silent archived re-run) and #25 (`.m3u8` grouping). Both since built/merged.
+- **2026-08-23 (#42)** — Broadened the gate's witness path (sibling of #41). Built test-first, two-axis review clean (fixed a CONTEXT.md "song" glossary drift; flagged + honoured the #38 speed rule). Live-verified track 11 on `PLBLcoq9Bb-FU` — re-hit the archived-`--out` trap (`docs/LEARNINGS.md`) on the first run, re-ran into a fresh dir. PR #44.
+- **2026-08-23 (#41 / #38)** — #38 shipped (`PR #40`): Resolver became the identity witness, gate verifies on its verdict (closed #16/#17). #41 shipped (`PR #43`): grammatical stopwords ignored in title agreement.
+- **2026-08-23 (#37)** — #37 (`PR #39`): Track captures the Source's description/tags/thumbnail URL — the prerequisite that unblocked #38.
 
 ## Where the rest of the context lives
 
-- **Decisions:** `docs/adr/` — `0001`–`0006` (`0006` = the identity-evidence decision). **Glossary:** `CONTEXT.md`. **Spec:** issue #1.
-- **Tickets:** **#38** (next, unblocked — speed-sensitive, see comment); reference **#16**/**#17** (closed by #38). #37 done (`PR #39`).
-- **Observation harness:** `tools/observe.py` (`python tools/observe.py <url>`); output → gitignored `retest/observe/`.
-- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work) — incl. the binary-Shazam-confidence lesson. **Dev setup:** `docs/DEVELOPMENT.md` (needs deno on PATH for smoke tests).
-- **Prototype code + verdict tables:** branch `prototype/identify-spike`. **Garden vault:** `/graft` to push, not this board.
+- **Decisions:** `docs/adr/` — `0001`–`0006` (`0006` = Resolver as identity witness). **Glossary:** `CONTEXT.md`. **Spec:** issue #1.
+- **Observation harness:** `tools/observe.py` (`python tools/observe.py <url>`); output → gitignored `retest/` (use a **fresh `--out`** dir — a reused one's archive skips everything).
+- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md` (needs deno on PATH for smoke tests).
+- **Prototype:** branch `prototype/identify-spike`. **Garden:** `/graft`, not this board.
