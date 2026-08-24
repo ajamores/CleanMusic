@@ -16,18 +16,18 @@ Muzik — downloads music from a YouTube **Source** and writes verified **Tags**
 
 ## Current State (2026-08-23)
 
-- **On branch `42-witness-when-title-agrees`, PR #44 open (awaiting merge/review).** Working tree clean. `main` HEAD `611d424` (#41).
-- **#42 built + live-verified.** Confidence gate now consults the identity witness on **every** title-agreeing-but-not-title-corroborated Match (not just the no-artist-witness case) — catches reversed "Song - Artist" titles, "Dj" prefixes, artist-across-the-dash. `consistent` → verified with the fingerprint's Tags, never the reversed Source parse; title *disagreements* stay off the AI path (speed, #38). Dropped two now-dead `_conflict_why` branches; synced `observe.py`'s `consults_witness` diagnostic to the new predicate.
+- **On `main`, clean.** #42 merged (`PR #44`, squash → `6e8fada`); #42 closed. Nothing in flight.
+- **#42 shipped + live-verified.** Confidence gate now consults the identity witness on **every** title-agreeing-but-not-title-corroborated Match (not just the no-artist-witness case) — catches reversed "Song - Artist" titles, "Dj" prefixes, artist-across-the-dash. `consistent` → verified with the fingerprint's Tags, never the reversed Source parse; title *disagreements* stay off the AI path (speed, #38). Dropped two now-dead `_conflict_why` branches; synced `observe.py`'s `consults_witness` diagnostic to the new predicate.
 - **Live proof (`tools/observe.py` on `PLBLcoq9Bb-FU`):** track 11 ("Buscando La Verdad - Ricky Campanelli", fingerprint "Dj Ricky Campanelli") now **verifies** with the fingerprint's Tags. Speed: +1 witness call on the 14-track run, ~1.9 s on a 101 s run. Offline suite 147 green (3 smoke deselected).
-- **Ticket frontier is empty** of `ready-for-agent` work: only #42 (this PR) and #1 (master spec) remain open. The #16/#17/#38 epic is fully shipped.
+- **Ticket frontier is empty** of `ready-for-agent` work: only #1 (master spec) remains open. The #16/#17/#38 epic is fully shipped.
 
 ## Where to next
 
-- **Merge PR #44**, then the queue is dry. Next work must be **generated**, not picked up — an on-ramp, not `/implement`:
+- The queue is dry. Next work must be **generated**, not picked up — an on-ramp, not `/implement`:
   - `/triage` if bug reports / requests have piled up (things not self-authored),
   - `/improve-codebase-architecture` for upkeep,
   - `/grill-with-docs` for a new Muzik idea (web UI, batch-review UX).
-- Decide that door in a **fresh session** — don't spend #42's context on it.
+- Decide that door in a **fresh session**.
 
 ## Recent sessions (rolling — last 2–3)
 
