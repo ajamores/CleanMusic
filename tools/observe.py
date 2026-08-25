@@ -11,7 +11,13 @@ This drives a real batch (real Shazam Fingerprinter, real Haiku Resolver) and,
 without changing engine behaviour, writes one JSONL row per Track capturing what
 the pipeline computed but never emits: the fingerprint result, the gate breakdown
 (title agreement, artist corroboration, fast path vs. witness path), whether the
-album Resolver was reached and what it proposed, and the identity witness verdict.
+MusicBrainz album tier was consulted and what it placed (#45), whether the album
+Resolver was reached and what it proposed, and the identity witness verdict.
+
+For #45 specifically it isolates the album tier's own cost and payoff: run the
+same Source before and after the fix and read the MusicBrainz block against the
+Resolver block — albums MusicBrainz now places are Resolver AI calls avoided, so
+the added MusicBrainz time is offset by Resolver calls removed, not paid on top.
 
 The two providers are wrapped in thin *recording* seams that log then delegate;
 the gate breakdown is recomputed from ``muzik.engine``'s own pure helpers, so the
@@ -31,7 +37,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from muzik.domain import IdentityRuling, Match, Source, Track
+from muzik.domain import IdentityRuling, Match, Source, Tags, Track
 from muzik.engine import (
     Providers,
     _agrees,
@@ -69,6 +75,18 @@ class _Record:
     #: Wall-clock of the witness call (ms) — the added per-uncorroborated-Track cost
     #: the #38 acceptance asks to measure. None when the witness never ran.
     witness_ms: float | None = None
+    #: True once the MusicBrainz album tier (``canonical_album``) was consulted for
+    #: this Track — i.e. the fingerprint album looked non-canonical, so the waterfall
+    #: asked MusicBrainz (#45). False means the album was already canonical and the
+    #: tier was skipped.
+    album_tier_reached: bool = False
+    #: The studio album MusicBrainz placed, or None when it found none (or the tier
+    #: was never consulted).
+    album_tier_result: str | None = None
+    #: Wall-clock of the ``canonical_album`` call (ms) — the added MusicBrainz cost
+    #: #45 introduces (now two requests, library-spaced, not one). None when the tier
+    #: never ran.
+    album_tier_ms: float | None = None
 
 
 class _Sink:
@@ -103,6 +121,21 @@ class _Sink:
             record.witness_reached = True
             record.witness_verdict = ruling.verdict
             record.witness_ms = elapsed_ms
+
+    def note_album_lookup(
+        self, isrc: str | None, album: str | None, elapsed_ms: float
+    ) -> None:
+        # canonical_album only carries the ISRC, not the Track, so find the record
+        # whose Match holds that ISRC (identify always ran first, so the Match is
+        # already stored). At concurrency 1 — the harness default — ISRCs are
+        # distinct and ordered, so the first match is the right one.
+        with self._lock:
+            for record in self._records.values():
+                if record.match is not None and record.match.isrc == isrc:
+                    record.album_tier_reached = True
+                    record.album_tier_result = album
+                    record.album_tier_ms = elapsed_ms
+                    return
 
     def get(self, source_url: str) -> _Record | None:
         return self._records.get(source_url)
@@ -141,6 +174,30 @@ class _RecordingResolver:
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._sink.note_witness(track, ruling, elapsed_ms)
         return ruling
+
+
+class _RecordingAuthority:
+    """Wraps a real Authority: times ``canonical_album`` and records whether the
+    MusicBrainz album tier was consulted and what it placed (#45), then returns its
+    result unchanged. ``tags_for`` is pure and passes straight through.
+
+    It sits *inside* ``RateLimitedAuthority`` so the timing is MusicBrainz's own
+    cost — the two library-spaced requests the #45 fix introduces — not the app's
+    between-Track throttle wait (the whole-run wall-clock already carries that)."""
+
+    def __init__(self, inner: ShazamOwnAuthority, sink: _Sink) -> None:
+        self._inner = inner
+        self._sink = sink
+
+    def tags_for(self, match: Match) -> Tags:
+        return self._inner.tags_for(match)
+
+    def canonical_album(self, isrc: str | None) -> str | None:
+        t0 = time.perf_counter()
+        album = self._inner.canonical_album(isrc)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        self._sink.note_album_lookup(isrc, album, elapsed_ms)
+        return album
 
 
 def _gate_breakdown(track: Track, match: Match) -> dict:
@@ -213,6 +270,15 @@ def _row(result, record: _Record | None) -> dict:
             "verdict": record.witness_verdict,
             "ms": round(record.witness_ms, 1) if record.witness_ms is not None else None,
         }
+        row["album_tier"] = {
+            # reached=True means the fingerprint album looked non-canonical, so
+            # MusicBrainz was consulted (#45).
+            "reached": record.album_tier_reached,
+            # None with reached=True means MusicBrainz found no studio album — the
+            # track then falls through to the Resolver tier.
+            "placed_album": record.album_tier_result,
+            "ms": round(record.album_tier_ms, 1) if record.album_tier_ms is not None else None,
+        }
     if result.tags is not None:
         row["final_tags"] = {
             "artist": result.tags.artist,
@@ -243,6 +309,16 @@ def _summarize(rows: list[dict], run_seconds: float) -> str:
     avg_witness = f"{sum(witness_ms) / len(witness_ms):.0f} ms" if witness_ms else "n/a"
     total_witness = f"{sum(witness_ms) / 1000:.1f} s" if witness_ms else "0 s"
 
+    # The #45 measurement: how often the MusicBrainz album tier was consulted, how
+    # often it placed a studio album (each placement is a Resolver AI call avoided),
+    # and the wall-clock it added. A tier that places albums should push the Resolver
+    # "reached" count down — read these two blocks together.
+    album_reached = sum(1 for r in rows if r.get("album_tier", {}).get("reached"))
+    album_placed = sum(1 for r in rows if r.get("album_tier", {}).get("placed_album"))
+    album_ms = [r["album_tier"]["ms"] for r in rows if r.get("album_tier", {}).get("ms") is not None]
+    avg_album = f"{sum(album_ms) / len(album_ms):.0f} ms" if album_ms else "n/a"
+    total_album = f"{sum(album_ms) / 1000:.1f} s" if album_ms else "0 s"
+
     lines = [
         f"Tracks observed:            {len(rows)}",
         f"  fingerprint matched:      {len(matched)}",
@@ -265,6 +341,13 @@ def _summarize(rows: list[dict], run_seconds: float) -> str:
         f"  avg per witnessed Track:  {avg_witness}",
         f"  total witness time:       {total_witness}   (the added AI cost this run)",
         "",
+        "MusicBrainz album tier — the #45 measurement:",
+        f"  consulted (album non-canonical): {album_reached}",
+        f"  placed a studio album:    {album_placed}   (each is a Resolver call avoided)",
+        f"  found nothing:            {album_reached - album_placed}",
+        f"  avg per consulted Track:  {avg_album}",
+        f"  total MusicBrainz time:   {total_album}   (the added cost this run)",
+        "",
         "Album Resolver behaviour:",
         f"  reached (album unresolved after catalogs): {resolver_reached}",
         f"  proposed an album:        {resolver_proposed}",
@@ -283,7 +366,9 @@ def _build_providers(sink: _Sink, out_dir: Path, expand_playlist: bool) -> Provi
     return Providers(
         downloader=downloader,
         fingerprinter=_RecordingFingerprinter(ShazamFingerprinter(), sink),
-        authority=RateLimitedAuthority(ShazamOwnAuthority(), min_interval=1.0),
+        authority=RateLimitedAuthority(
+            _RecordingAuthority(ShazamOwnAuthority(), sink), min_interval=1.0
+        ),
         resolver=_RecordingResolver(HaikuResolver(), sink),
         tagwriter=Mp4TagWriter(),
         review_queue=JsonReviewQueue(out_dir / "review-queue.jsonl"),
