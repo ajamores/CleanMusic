@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from muzik.artist import normalise_artist
 from muzik.domain import (
     IdentityVerdict,
     Match,
@@ -257,7 +258,7 @@ def _tag_matched(
         track, match, tags, providers.resolver, second_source
     )
     tags = _with_thumbnail_fallback(track, tags, providers)
-    output_path = _write(track, tags, providers)
+    tags, output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
         tags=tags,
@@ -356,7 +357,7 @@ def _apply_review_decision(
 def _tag_from_review(item: ReviewItem, tags: Tags, providers: Providers) -> TrackResult:
     """Write ``tags`` (verified) into the queued Track's file and return the result."""
     track = _track_from_item(item)
-    output_path = _write(track, tags, providers)
+    tags, output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=item.source_url,
         tags=tags,
@@ -386,7 +387,7 @@ def _reidentify(item: ReviewItem, hint: str, providers: Providers) -> TrackResul
     if match is None or not _hint_corroborates(match, hint):
         match = seed
     tags = replace(_album_waterfall(track, match, providers), verified=True)
-    output_path = _write(track, tags, providers)
+    tags, output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
         tags=tags,
@@ -764,12 +765,18 @@ def _source_only_tags(track: Track) -> Tags | None:
     return Tags(title=title, artist=uploader_artist, album="", verified=False)
 
 
-def _write(track: Track, tags: Tags, providers: Providers) -> Path:
-    """Write Tags into the Track's file, returning its path.
+def _write(track: Track, tags: Tags, providers: Providers) -> tuple[Tags, Path]:
+    """Canonicalise the artist Tag, write, and return the written Tags with its path.
 
-    Skeleton: default format. #9 adds output-format selection (M4A/MP3 320).
+    The single choke point every write funnels through — the batch's matched and
+    best-effort paths and the review-clear paths alike — so normalising the artist
+    here (#47) covers verified and provisional Tags in one place, with no path able
+    to skip it. The possibly-rewritten Tags are returned so each caller reports what
+    was actually written: the file, the Review queue entry, and a ``--playlist``
+    run's ``.m3u8`` all carry the same canonical artist.
     """
-    return providers.tagwriter.write(track, tags)
+    tags = replace(tags, artist=normalise_artist(tags.artist))
+    return tags, providers.tagwriter.write(track, tags)
 
 
 def _best_effort_review(track: Track, reason: str, providers: Providers) -> TrackResult:
@@ -792,7 +799,7 @@ def _best_effort_review(track: Track, reason: str, providers: Providers) -> Trac
             reason=reason,
         )
     tags = _with_thumbnail_fallback(track, tags, providers)
-    output_path = _write(track, tags, providers)
+    tags, output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
         tags=tags,

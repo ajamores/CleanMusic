@@ -46,6 +46,10 @@ _Avoid_: source (overloaded with Source), database
 The metadata written into a Track's file — title, artist, album, track number, year, cover art. Tags are either verified (from a Match that passed the Confidence gate) or provisional (best-effort, drawn from the Source, pending review).
 _Avoid_: metadata, ID3
 
+**Artist normalisation**:
+A conservative canonicalisation of the artist name applied just before it is written (verified and provisional Tags alike), so a library doesn't accumulate variants of one artist. v1 unifies feature-credit form (`ft.` / `featuring` / `(feat. …)` → one `feat.`), de-duplicates repeated credits, NFC-normalises Unicode, and collapses whitespace — but never folds case, strips diacritics, or romanises, because those can merge two distinct artists without a catalog (ADR-0007). The rule: an untidy-but-correct name beats a wrong merge.
+_Avoid_: cleanup, dedupe (as the whole thing), fuzzy-match
+
 **Review queue**:
 The set of Tracks whose Identification was too uncertain to auto-tag. It fills during a batch and the user clears it in one pass after the batch completes — the batch itself never blocks.
 _Avoid_: pending list, errors, failures
