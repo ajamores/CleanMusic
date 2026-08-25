@@ -1,7 +1,7 @@
 ---
 type: meta
 title: "Hot — muziktest"
-updated: 2026-08-23
+updated: 2026-08-25
 tags: [meta, hot-cache]
 status: evergreen
 ---
@@ -12,32 +12,29 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script); core engine + CLI now, web later. Real providers wired in `cli.py`: yt-dlp, **Shazam** fingerprint, **MusicBrainz** album-by-ISRC, **Haiku** Resolver, MP3/M4A writers, JSON review queue. Identity comes from the fingerprint; the Resolver is the **identity witness** the gate verifies on (ADR-0006).
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script); core engine + CLI now, web later. Provider seams wired in `cli.py`: yt-dlp, **Shazam** fingerprint, **AcoustID** second fingerprint, **MusicBrainz** album-by-ISRC/recording, **Haiku** Resolver, MP3/M4A writers, thumbnail fetcher, JSON review queue. Identity comes from the fingerprint; the Resolver is the **identity witness** the gate verifies on (ADR-0006).
 
-## Current State (2026-08-23)
+## Current State (2026-08-25)
 
-- **On `main`, clean.** #42 merged (`PR #44`, squash → `6e8fada`); #42 closed. Nothing in flight.
-- **#42 shipped + live-verified.** Confidence gate now consults the identity witness on **every** title-agreeing-but-not-title-corroborated Match (not just the no-artist-witness case) — catches reversed "Song - Artist" titles, "Dj" prefixes, artist-across-the-dash. `consistent` → verified with the fingerprint's Tags, never the reversed Source parse; title *disagreements* stay off the AI path (speed, #38). Dropped two now-dead `_conflict_why` branches; synced `observe.py`'s `consults_witness` diagnostic to the new predicate.
-- **Live proof (`tools/observe.py` on `PLBLcoq9Bb-FU`):** track 11 ("Buscando La Verdad - Ricky Campanelli", fingerprint "Dj Ricky Campanelli") now **verifies** with the fingerprint's Tags. Speed: +1 witness call on the 14-track run, ~1.9 s on a 101 s run. Offline suite 147 green (3 smoke deselected).
-- **Ticket frontier is empty** of `ready-for-agent` work: only #1 (master spec) remains open. The #16/#17/#38 epic is fully shipped.
+- **On `main`, clean.** Three tickets shipped this session's chain: #45, #52, #51.
+- **#51 done (PR #55, `2423c3f`).** AcoustID is a **second acoustic witness** fed to the ADR-0006 witness — not a blind fallback. Runs only on the uncorroborated + Shazam-miss paths; the corroborated fast path stays Shazam-only (test-enforced). Album hydrates by MusicBrainz recording id (reuses #45's tier), primary Match only. New dep `pyacoustid`; needs `fpcalc` + `ACOUSTID_API_KEY` (self-disables without them).
 
-## Where to next
+## Frontier (open — priority order)
 
-- The queue is dry. Next work must be **generated**, not picked up — an on-ramp, not `/implement`:
-  - `/triage` if bug reports / requests have piled up (things not self-authored),
-  - `/improve-codebase-architecture` for upkeep,
-  - `/grill-with-docs` for a new Muzik idea (web UI, batch-review UX).
-- Decide that door in a **fresh session**.
+- **#46 — live contract smoke tests (`ready-for-agent`).** Shazam / MusicBrainz / Haiku. MB (#45) and yt-dlp (#30) smokes exist, and #51 added an AcoustID smoke — but Shazam and Haiku live contracts are still unwritten. The gap that hid #45.
+- **#47 — artist-name normalisation across written Tags (spec US#26, `ready-for-agent`, unbuilt).**
+- **#48 — route classical Tracks to Review (spec US#25, `ready-for-human`).** Needs a human decision first.
+- **#49 — harden idempotency / archive re-run detection (`ready-for-human`).** Needs a human decision first.
+- **#50 — 60s fingerprint window (`needs-triage`, low).**
 
 ## Recent sessions (rolling — last 2–3)
 
-- **2026-08-23 (#42)** — Broadened the gate's witness path (sibling of #41). Built test-first, two-axis review clean (fixed a CONTEXT.md "song" glossary drift; flagged + honoured the #38 speed rule). Live-verified track 11 on `PLBLcoq9Bb-FU` — re-hit the archived-`--out` trap (`docs/LEARNINGS.md`) on the first run, re-ran into a fresh dir. PR #44.
-- **2026-08-23 (#41 / #38)** — #38 shipped (`PR #40`): Resolver became the identity witness, gate verifies on its verdict (closed #16/#17). #41 shipped (`PR #43`): grammatical stopwords ignored in title agreement.
-- **2026-08-23 (#37)** — #37 (`PR #39`): Track captures the Source's description/tags/thumbnail URL — the prerequisite that unblocked #38.
+- **2026-08-25 — #51 AcoustID second witness.** Merged via PR #55. Branched off main *after* merging #52 first (kept #51 an independent PR). Two-axis review caught a throwaway MB lookup on the second-opinion path → fixed by the recording-id design.
+- **2026-08-25 — #52 artwork fallback.** Thumbnail as fallback cover art so no Track ships bare (PR #54). Added shared `real/images.fetch_thumbnail`.
+- **Earlier — #45 MusicBrainz album tier fix (PR #53).** Two-lookup ISRC→recording→release-groups; unblocked #51.
 
 ## Where the rest of the context lives
 
-- **Decisions:** `docs/adr/` — `0001`–`0006` (`0006` = Resolver as identity witness). **Glossary:** `CONTEXT.md`. **Spec:** issue #1.
-- **Observation harness:** `tools/observe.py` (`python tools/observe.py <url>`); output → gitignored `retest/` (use a **fresh `--out`** dir — a reused one's archive skips everything).
-- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md` (needs deno on PATH for smoke tests).
-- **Prototype:** branch `prototype/identify-spike`. **Garden:** `/graft`, not this board.
+- **Decisions:** `docs/adr/` (`0006` = identity witness, now amended for #51). **Glossary:** `CONTEXT.md`. **Spec:** issue #1 (closed).
+- **Observation harness:** `tools/observe.py` (`python tools/observe.py <url>`); output → gitignored `retest/` (fresh `--out`). **Smoke:** `pytest -m smoke` (opt-in; skips w/o network/toolchain).
+- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md` (needs deno + ffmpeg + `fpcalc` on PATH). **Garden:** `/graft`, not this board.
