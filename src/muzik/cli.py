@@ -23,6 +23,7 @@ from muzik.providers import PlaylistInSingleModeError, Resolver
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
+from muzik.real.images import HttpThumbnailFetcher
 from muzik.real.playlist import M3u8PlaylistWriter
 from muzik.real.resolver import HaikuResolver
 from muzik.real.review_queue import JsonReviewQueue
@@ -95,6 +96,9 @@ def _build_providers(
         # Writes a .m3u8 only on a --playlist expansion (#25); a single-mode run
         # leaves the Downloader's playlist_title None, so the engine calls it not.
         playlist_writer=M3u8PlaylistWriter(out_dir),
+        # Fallback cover art (#52): a Track left bare by identification gets its
+        # video thumbnail embedded instead of shipping with no art.
+        thumbnail_fetcher=HttpThumbnailFetcher(),
     )
 
 

@@ -39,11 +39,16 @@ class FakeDownloader:
         cookies: Path | None = None,
         entries: Sequence[tuple[str, bool]] | None = None,
         download_archive: set[str] | None = None,
+        thumbnail_url: str = "",
     ):
         self._audio_path = audio_path
         self._title = title
         self._uploader = uploader
         self._output_format = output_format
+        #: The thumbnail URL every produced Track carries (#52) — the artwork
+        #: fallback's input. Empty by default, so a test only exercises the
+        #: fallback when it opts in.
+        self._thumbnail_url = thumbnail_url
         self._cookies = cookies
         #: Each entry is ``(title, age_restricted)``.
         self._entries = list(entries) if entries is not None else [(title, False)]
@@ -76,6 +81,7 @@ class FakeDownloader:
                     audio_path=base.with_suffix(self._output_format.file_suffix),
                     source_title=title,
                     uploader=self._uploader,
+                    thumbnail_url=self._thumbnail_url,
                 )
             )
             if self._archive is not None:
@@ -173,6 +179,24 @@ class FakeTagWriter:
     def write(self, track: Track, tags: Tags) -> Path:
         self.written.append((track, tags))
         return track.audio_path.with_suffix(self._output_format.file_suffix)
+
+
+class FakeThumbnailFetcher:
+    """Stands in for the thumbnail fetch (#52) — no network.
+
+    Returns the preset ``data`` for any URL, or ``None`` to simulate a fetch
+    miss/timeout (the Track then degrades to bare). Records each URL it was asked
+    for, so a whole-box test can assert the fallback fetched only when it should —
+    never when the Tags already carry real art.
+    """
+
+    def __init__(self, data: bytes | None = None) -> None:
+        self._data = data
+        self.fetch_calls: list[str] = []
+
+    def fetch(self, url: str) -> bytes | None:
+        self.fetch_calls.append(url)
+        return self._data
 
 
 class FakeReviewQueue:

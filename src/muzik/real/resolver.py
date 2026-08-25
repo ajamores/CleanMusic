@@ -20,24 +20,21 @@ from __future__ import annotations
 import base64
 import json
 import re
-import urllib.request
 from typing import get_args
 
 import anthropic
 
 from muzik.domain import IdentityRuling, IdentityVerdict, Match, Track
+from muzik.real.images import fetch_thumbnail
 
 _HAIKU = "claude-haiku-4-5"
 
 #: How long to wait on the witness's *API call* before degrading to ``unsure``
-#: (ADR-0002). The thumbnail fetch that precedes it is bounded separately
-#: (``_THUMBNAIL_TIMEOUT_S``), so the whole witness is bounded by their sum — the
-#: real per-uncorroborated-Track worst case (#38, speed-sensitive). Both legs
-#: degrade rather than raise, so a slow provider never stalls a batch.
+#: (ADR-0002). The thumbnail fetch that precedes it is bounded separately (by the
+#: shared ``images.fetch_thumbnail``), so the whole witness is bounded by their
+#: sum — the real per-uncorroborated-Track worst case (#38, speed-sensitive). Both
+#: legs degrade rather than raise, so a slow provider never stalls a batch.
 _WITNESS_TIMEOUT_S = 20.0
-
-#: How long to wait for the thumbnail before witnessing on text alone.
-_THUMBNAIL_TIMEOUT_S = 8.0
 
 #: Cap on how much description text to send — enough to identify, without paying
 #: for a whole video's worth of boilerplate on every witnessed Track.
@@ -172,30 +169,15 @@ def _parse_ruling(text: str) -> IdentityRuling:
 
 
 def _fetch_image(url: str) -> tuple[str, str] | None:
-    """Fetch a thumbnail as (base64 data, media_type), or None when unavailable.
+    """Fetch a thumbnail as (base64 data, media_type) for the multimodal call.
 
-    Best-effort: a missing URL or any fetch error leaves the witness to reason over
-    text alone rather than fail. Only the bytes are pulled here, on demand — the
-    Track carries just the URL (#37), so no fetch happens until a witness needs it.
+    Thin wrapper over the shared ``fetch_thumbnail`` (#52): the witness needs the
+    bytes base64-encoded, the tagging path needs them raw, so the fetch/timeout
+    live once in ``images`` and each caller adapts. ``None`` when unavailable —
+    the witness then reasons over text alone rather than fail.
     """
-    if not url:
+    result = fetch_thumbnail(url)
+    if result is None:
         return None
-    try:
-        with urllib.request.urlopen(url, timeout=_THUMBNAIL_TIMEOUT_S) as resp:
-            raw = resp.read()
-    except Exception:
-        return None
-    if not raw:
-        return None
-    return base64.standard_b64encode(raw).decode("ascii"), _media_type(raw)
-
-
-def _media_type(raw: bytes) -> str:
-    """Sniff a supported image media type from magic bytes; default JPEG."""
-    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if raw[:3] == b"GIF":
-        return "image/gif"
-    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
-        return "image/webp"
-    return "image/jpeg"
+    raw, media_type = result
+    return base64.standard_b64encode(raw).decode("ascii"), media_type

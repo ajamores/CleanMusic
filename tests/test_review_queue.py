@@ -83,9 +83,10 @@ def test_a_gate_failure_is_queued_with_its_provisional_tags_and_a_reason():
 def test_a_fingerprint_miss_is_queued_with_a_reason():
     queue = FakeReviewQueue()
     results = run(Source(url="https://youtu.be/miss"), _providers(None, queue))
-    assert results[0].status == "review"
+    # Written best-effort from the Source (#52), but still queued for Review.
+    assert results[0].status == "tagged"
     assert len(queue.items()) == 1
-    assert queue.items()[0].tags is None
+    assert queue.items()[0].tags is not None
     assert queue.items()[0].reason == "no fingerprint match"
     assert summarize(results).queued == 1
 

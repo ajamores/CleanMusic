@@ -108,6 +108,20 @@ class TagWriter(Protocol):
     def write(self, track: Track, tags: Tags) -> Path: ...
 
 
+class ThumbnailFetcher(Protocol):
+    """Fetches a Track's thumbnail as raw image bytes, for the artwork fallback (#52).
+
+    The last-resort cover art: when identification leaves a Track with no real
+    ``cover_art``, its video thumbnail is embedded so no file ships bare. Returns
+    the raw bytes (the tag writer sniffs PNG vs JPEG itself), or ``None`` on a
+    missing URL, a timeout, or any fetch error — the Track then degrades to bare
+    rather than blocking the batch (ADR-0002), the same contract as the other
+    network tiers.
+    """
+
+    def fetch(self, url: str) -> bytes | None: ...
+
+
 class ReviewQueue(Protocol):
     """The persisted set of Tracks too uncertain to auto-tag (CONTEXT.md).
 

@@ -27,3 +27,13 @@ The Confidence gate no longer rests on Shazam alone. A live observation run prov
 - **Speed.** The witness fires **only** on the uncorroborated path; a Match the Source title independently corroborates (title + artist) still verifies with **no AI call** — the common case is unchanged. The witness call is bounded by a timeout.
 - **Degradation holds.** A witness failure or timeout degrades to `unsure` (→ Review), never aborts the batch — the same batch-never-blocks contract as the album waterfall's tiers.
 - This closes #16 and #17 (see ADR-0003's amendment, which supersedes the confidence-bar rule).
+
+## Amendment (#52): every Track carries artwork — thumbnail as fallback cover art
+
+The "a wrong tag is worse than an honest weak one" stance is relaxed **for artwork only**. The primary use is a downloaded Track with cover art on the file, yet a live 16-Track run left 5 files bare: provisional Source Tags carry no `cover_art`, and the no-fingerprint-match path wrote nothing at all. Neither cause is an edge case.
+
+New rule, purely additive: after identification, if a Track's Tags have no `cover_art` and the Track names a `thumbnail_url`, embed the **video thumbnail**; otherwise leave the real cover untouched. A thumbnail is honest best-effort — for a sleeve-as-video upload it is often the actual cover, better than a contradicted fingerprint's art — and it only ever fills emptiness, so confident Tracks with real album art are unaffected.
+
+- **No Track left bare.** The `match is None` path now writes best-effort Tags from the Source itself (title/artist) plus the thumbnail, still enqueued to Review as an unverified guess — no longer left untagged. Only a Source with no usable title writes nothing.
+- **Degradation holds.** The thumbnail fetch is bounded by a timeout and shares the other tiers' never-block contract: a fetch miss or timeout degrades the Track to bare rather than aborting the batch.
+- One shared, bounded thumbnail fetcher (`real/images.fetch_thumbnail`) now serves both the identity witness (ADR-0006) and this fallback — no duplicated fetch/timeout logic.
