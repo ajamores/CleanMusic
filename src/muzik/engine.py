@@ -67,6 +67,20 @@ class _NullPlaylistWriter:
         return None
 
 
+class _NullFingerprinter:
+    """Identifies nothing — the default second acoustic source (#51).
+
+    Keeps the AcoustID witness (ADR-0006) inert unless a caller injects a real
+    second fingerprinter, so a Track is only ever cross-checked against a source a
+    caller opted into. Real runs wire ``AcoustIdFingerprinter`` (``cli.py``); tests
+    inject a fake. Returning ``None`` (a miss) means the witness sees only the
+    primary Shazam claim — exactly the pre-#51 behaviour.
+    """
+
+    def identify(self, track: Track) -> Match | None:  # noqa: D102
+        return None
+
+
 class _NullThumbnailFetcher:
     """Fetches nothing — the default when a caller wires no thumbnail fallback.
 
@@ -91,6 +105,11 @@ class Providers:
     review_queue: ReviewQueue = field(default_factory=_NullReviewQueue)
     playlist_writer: PlaylistWriter = field(default_factory=_NullPlaylistWriter)
     thumbnail_fetcher: ThumbnailFetcher = field(default_factory=_NullThumbnailFetcher)
+    #: The second acoustic source (AcoustID, #51) — a Fingerprinter consulted only
+    #: on the identity witness's own triggers (the uncorroborated path and the
+    #: Shazam-miss path), never the corroborated fast path (#38). Defaults to a
+    #: no-op, so the second witness stays inert unless a caller wires it.
+    acoustid: Fingerprinter = field(default_factory=_NullFingerprinter)
 
 
 @dataclass(frozen=True)
@@ -190,12 +209,53 @@ def _process_tracks(
 
 
 def _process_track(track: Track, providers: Providers) -> TrackResult:
-    """The pipeline for a single Track: identify → album → gate → write."""
+    """The pipeline for a single Track: identify → album → gate → write.
+
+    Shazam is the primary identifier. When it hits, AcoustID (#51) may be consulted
+    inside the gate as a *second* acoustic witness — but only on the uncorroborated
+    path, never the corroborated fast path (#38). When Shazam misses entirely,
+    ``_rescue_or_review`` tries AcoustID before falling back to a best-effort Review.
+    """
     match = providers.fingerprinter.identify(track)
     if match is None:
+        return _rescue_or_review(track, providers)
+    return _tag_matched(track, match, providers, second_source=providers.acoustid)
+
+
+def _rescue_or_review(track: Track, providers: Providers) -> TrackResult:
+    """Shazam found nothing — try the second acoustic source before giving up (#51).
+
+    AcoustID and Shazam have complementary blind spots, so a Shazam miss is exactly
+    where a second fingerprinter earns its cost (this path was already destined for
+    Review — a "try harder" replacing a "give up", #38). A hit becomes *the* Match,
+    run through the same album waterfall and gate as a Shazam Match; with Shazam
+    absent there is no other acoustic claim, so the gate consults no second source.
+    A miss (both fingerprinters silent) falls to the best-effort Review path.
+    """
+    rescued = providers.acoustid.identify(track)
+    if rescued is None:
         return _best_effort_review(track, "no fingerprint match", providers)
+    return _tag_matched(track, rescued, providers, second_source=None)
+
+
+def _tag_matched(
+    track: Track,
+    match: Match,
+    providers: Providers,
+    *,
+    second_source: Fingerprinter | None,
+) -> TrackResult:
+    """Album → gate → thumbnail → write for an identified Track.
+
+    Shared by the Shazam-hit and AcoustID-rescue paths. ``second_source`` is the
+    fingerprinter the gate may consult as a second acoustic witness on the
+    uncorroborated path (#51) — Shazam's partner AcoustID when Shazam is primary,
+    ``None`` when AcoustID is itself the primary (a rescue: no other source remains).
+    """
     tags = _album_waterfall(track, match, providers)
-    tags, reason, conflict = _confidence_gate(track, match, tags, providers.resolver)
+    tags, reason, conflict = _confidence_gate(
+        track, match, tags, providers.resolver, second_source
+    )
     tags = _with_thumbnail_fallback(track, tags, providers)
     output_path = _write(track, tags, providers)
     return TrackResult(
@@ -384,8 +444,9 @@ def _album_waterfall(track: Track, match: Match, providers: Providers) -> Tags:
     Keep the fingerprint's album when it already looks canonical. Otherwise
     (non-canonical — single / EP / remix — or missing) descend the waterfall:
 
-      1. the Authority's canonical studio album by ISRC (MusicBrainz), skipped
-         when there is no ISRC to look up;
+      1. the Authority's canonical studio album from MusicBrainz — by ISRC (Shazam's
+         handle), or by recording id when the identifier gave one directly instead
+         (AcoustID, #51); skipped when the Match carries neither;
       2. the Resolver (Claude Haiku, #4), the last resort, consulted only when
          the album is *still* unresolved after the catalogs.
 
@@ -398,6 +459,10 @@ def _album_waterfall(track: Track, match: Match, providers: Providers) -> Tags:
         return tags
     if match.isrc:
         studio_album = providers.authority.canonical_album(match.isrc)
+        if studio_album:
+            return replace(tags, album=studio_album)
+    if match.recording_mbid:
+        studio_album = providers.authority.canonical_album_for_recording(match.recording_mbid)
         if studio_album:
             return replace(tags, album=studio_album)
     resolved = providers.resolver.resolve(track, match)
@@ -534,7 +599,11 @@ def _provisional_from_source(source_title: str, fallback_artist: str) -> Tags | 
 
 
 def _confidence_gate(
-    track: Track, match: Match, tags: Tags, resolver: Resolver
+    track: Track,
+    match: Match,
+    tags: Tags,
+    resolver: Resolver,
+    second_source: Fingerprinter | None,
 ) -> tuple[Tags, str | None, MatchConflict | None]:
     """Confirm the Match against the Source, or fall back to provisional.
 
@@ -544,32 +613,38 @@ def _confidence_gate(
 
     Three paths (see the header comment). The Match is verified outright only when
     the Source's own title corroborates it on **both** title and artist — a witness
-    a channel can't fake, and the common case, so it takes no AI call (#38). When
-    the title echoes the Match but its own title doesn't corroborate the artist, the
-    identity rests on the channel (assertable), on nothing, or on a *parse* that may
-    be reversed or dressed — a dumb "Artist - Title" split is not a reliable
-    contradiction signal (#42). There the Resolver is consulted as an independent
-    identity witness (ADR-0006), replacing the retired confidence bar (Shazam
-    confidence is binary — docs/LEARNINGS.md). Only a Source whose title names a
-    *different* recording is kept provisional without an AI call — a real
-    contradiction, which also bounds the added AI cost (#38).
+    a channel can't fake, and the common case, so it takes no AI call and no second
+    fingerprint (#38). When the title echoes the Match but its own title doesn't
+    corroborate the artist, the identity rests on the channel (assertable), on
+    nothing, or on a *parse* that may be reversed or dressed — a dumb "Artist -
+    Title" split is not a reliable contradiction signal (#42). There the Resolver is
+    consulted as an independent identity witness (ADR-0006), replacing the retired
+    confidence bar (Shazam confidence is binary — docs/LEARNINGS.md), and — this is
+    where #51 adds cost — the ``second_source`` (AcoustID) is fingerprinted so the
+    witness weighs a second *acoustic* claim, not just the video's metadata. Only a
+    Source whose title names a *different* recording is kept provisional without an
+    AI call or a second fingerprint — a real contradiction, which also bounds the
+    added cost (#38).
     """
     title_witness = _identity_tokens(_source_artist(track.source_title))
     title_agrees = _agrees(match, track.source_title)
     corroborated_by_title = _artist_corroborates(match, title_witness)
 
-    # Corroborated by the Source's own title (title + artist): verified, no AI.
+    # Corroborated by the Source's own title (title + artist): verified, no AI,
+    # no second fingerprint. The common case, kept off both cost paths (#38).
     if title_agrees and corroborated_by_title:
         return replace(tags, verified=True), None, None
 
     # Title echoes the Match, but the Source's own title doesn't independently back
     # the artist — no artist witness, or a parse that may be reversed/dressed (a
     # naive "Artist - Title" split can't be trusted as a contradiction, #42).
-    # Consult the identity witness instead of the (retired) confidence bar (#38).
+    # Consult the identity witness instead of the (retired) confidence bar (#38),
+    # and give it a second acoustic opinion (AcoustID, #51) when one is available.
     # On a `consistent` verdict the fingerprint's tags (already in `tags`) are
     # written verified — never the possibly-reversed Source parse.
     if title_agrees:
-        verdict = _identity_verdict(track, match, resolver)
+        second = second_source.identify(track) if second_source is not None else None
+        verdict = _identity_verdict(track, match, second, resolver)
         if verdict == "consistent":
             return replace(tags, verified=True), None, None
         return _unverified(tags, track, match, verdict)
@@ -631,16 +706,20 @@ def _conflict_why(match: Match, track: Track, verdict: IdentityVerdict | None) -
     return "the identity witness couldn't confirm the Match, kept provisional"
 
 
-def _identity_verdict(track: Track, match: Match, resolver: Resolver) -> IdentityVerdict:
+def _identity_verdict(
+    track: Track, match: Match, second: Match | None, resolver: Resolver
+) -> IdentityVerdict:
     """Ask the Resolver to witness the Match's identity, degrading safely (ADR-0002).
 
-    Any failure or timeout in the AI call is treated as ``unsure`` — the Track
-    stays unverified and goes to Review, but the batch never blocks. (The real
-    Resolver also degrades internally; this is the belt-and-braces boundary so a
-    misbehaving provider can't abort a batch.)
+    ``second`` is the second acoustic identification (AcoustID, #51) when one ran,
+    ``None`` otherwise; the witness weighs it as corroborating evidence. Any failure
+    or timeout in the AI call is treated as ``unsure`` — the Track stays unverified
+    and goes to Review, but the batch never blocks. (The real Resolver also degrades
+    internally; this is the belt-and-braces boundary so a misbehaving provider can't
+    abort a batch.)
     """
     try:
-        return resolver.witness_identity(track, match).verdict
+        return resolver.witness_identity(track, match, second).verdict
     except Exception:
         return "unsure"
 

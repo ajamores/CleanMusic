@@ -70,6 +70,18 @@ class ShazamOwnAuthority:
                 return album
         return None
 
+    def canonical_album_for_recording(self, recording_mbid: str | None) -> str | None:
+        """The canonical studio album for a MusicBrainz recording id, or None (#51).
+
+        The by-recording entry point ``canonical_album`` reaches after resolving an
+        ISRC. AcoustID hands back a recording id directly, so this skips the ISRC
+        step and browses that recording's releases straight away — one call, the
+        same studio-album filter and never-crash contract as the ISRC path.
+        """
+        if not recording_mbid:
+            return None
+        return self._studio_album_for_recording(recording_mbid)
+
     def _studio_album_for_recording(self, recording_id: str) -> str | None:
         """The first studio album among a recording's official album releases, or
         None. Browses releases *with* release-groups so the studio-album filter has
@@ -129,6 +141,16 @@ class RateLimitedAuthority:
         return self._inner.tags_for(match)
 
     def canonical_album(self, isrc: str | None) -> str | None:
+        return self._throttled(lambda: self._inner.canonical_album(isrc))
+
+    def canonical_album_for_recording(self, recording_mbid: str | None) -> str | None:
+        # AcoustID's by-recording album lookup (#51) hits the same MusicBrainz
+        # service, so it shares the one rate limiter — the two never race.
+        return self._throttled(
+            lambda: self._inner.canonical_album_for_recording(recording_mbid)
+        )
+
+    def _throttled(self, call: Callable[[], str | None]) -> str | None:
         # Holding the lock across the inner call keeps two MusicBrainz requests
         # from ever being in flight together; the spacing keeps successive calls
         # under the rate limit even when the pool has work queued behind them.
@@ -137,6 +159,6 @@ class RateLimitedAuthority:
             if wait > 0:
                 self._sleep(wait)
             try:
-                return self._inner.canonical_album(isrc)
+                return call()
             finally:
                 self._next_allowed = self._clock() + self._min_interval

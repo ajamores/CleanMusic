@@ -20,6 +20,7 @@ from muzik.domain import (
 )
 from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
 from muzik.providers import PlaylistInSingleModeError, Resolver
+from muzik.real.acoustid import AcoustIdFingerprinter
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
 from muzik.real.fingerprinter import ShazamFingerprinter
@@ -47,7 +48,9 @@ class _DisabledResolver:
     def resolve(self, track: Track, match: Match | None) -> Match | None:
         return None
 
-    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+    def witness_identity(
+        self, track: Track, match: Match, second: Match | None = None
+    ) -> IdentityRuling:
         # No key, no witness: the gate keeps the Match unverified and routes it to
         # Review, exactly as an ``unsure`` verdict would (CONTEXT.md: never block).
         return IdentityRuling(verdict="unsure", rationale="AI Resolver disabled (no API key)")
@@ -67,6 +70,23 @@ def _build_resolver() -> Resolver:
         )
         return _DisabledResolver()
     return HaikuResolver()
+
+
+def _build_acoustid() -> AcoustIdFingerprinter:
+    """The second acoustic source (AcoustID, #51), reported once when disabled.
+
+    Like the Resolver, it self-disables without a key: ``AcoustIdFingerprinter``
+    identifies nothing when ``ACOUSTID_API_KEY`` is absent, so the identity witness
+    simply falls back to Shazam alone. The note tells the user the second witness is
+    off (and that ``fpcalc`` is also required — see docs/DEVELOPMENT.md).
+    """
+    if not os.environ.get("ACOUSTID_API_KEY"):
+        print(
+            "note: no ACOUSTID_API_KEY (set it in the environment or a .env file) — "
+            "the second acoustic witness (AcoustID) is disabled; identity checks use "
+            "Shazam alone."
+        )
+    return AcoustIdFingerprinter()
 
 
 def _build_downloader(
@@ -99,6 +119,9 @@ def _build_providers(
         # Fallback cover art (#52): a Track left bare by identification gets its
         # video thumbnail embedded instead of shipping with no art.
         thumbnail_fetcher=HttpThumbnailFetcher(),
+        # Second acoustic witness (#51): AcoustID, consulted only on the unsure/miss
+        # paths (ADR-0006) — the fast path stays Shazam-only (#38).
+        acoustid=_build_acoustid(),
     )
 
 

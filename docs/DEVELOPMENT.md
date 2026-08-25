@@ -6,6 +6,10 @@
   Rust build fails from source. `yt-dlp` prints a deprecation warning on 3.10 but works;
   3.11 avoids the warning.
 - **ffmpeg** on `PATH` — used to extract audio and to down-convert clips for fingerprinting.
+- **`fpcalc`** (Chromaprint) on `PATH` — the fingerprint backend for the AcoustID second
+  identity witness (#51). Install the `chromaprint`/`libchromaprint-tools` package (e.g.
+  `apt install libchromaprint-tools`, `brew install chromaprint`). Absent it, AcoustID
+  self-disables and identity checks fall back to Shazam alone.
 - **A JavaScript runtime** on `PATH` — [deno](https://deno.land) (`curl -fsSL https://deno.land/install.sh | sh`) is yt-dlp's recommended one. yt-dlp now needs it for YouTube extraction; without it it falls back to a deprecated path that pulls degraded audio, which weakens the fingerprint and sends tracks to review that should verify (`docs/LEARNINGS.md`).
 - **`uv`** for environment and dependency management.
 
@@ -18,6 +22,11 @@ uv pip install -e ".[dev]"
 
 An `ANTHROPIC_API_KEY` in `.env` is needed only for the Resolver (Claude Haiku); the
 skeleton's happy path and the whole test suite run without it.
+
+An `ACOUSTID_API_KEY` in `.env` enables the AcoustID second identity witness (#51) —
+a free key from [acoustid.org](https://acoustid.org/new-application). Without it (or
+without `fpcalc`), AcoustID self-disables and identity checks use Shazam alone; the
+test suite runs without either.
 
 ## Running the tests
 
@@ -45,6 +54,12 @@ plus a full download toolchain — `yt-dlp`, `ffmpeg`, and **deno** (the JS runt
 see Requirements above). Missing any of those, each case **skips** rather than
 fails. The fixture video/playlist ids are pinned at the top of
 `tests/test_smoke_yt_dlp.py`; if one is taken down, repoint that one constant.
+
+The same `-m smoke` selection also drives the real MusicBrainz album tier
+(`test_smoke_musicbrainz.py`, #45) and the real AcoustID fingerprinter + `fpcalc`
+(`test_smoke_acoustid.py`, #51). The AcoustID case skips without `fpcalc`, an
+`ACOUSTID_API_KEY`, or network; point `MUZIK_SMOKE_AUDIO` at a real audio file to
+exercise a full live identification.
 
 ## Running the CLI
 

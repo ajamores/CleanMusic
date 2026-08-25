@@ -106,3 +106,25 @@ def test_witness_degrades_to_unsure_on_an_unknown_verdict():
     client = _FakeClient(reply='{"verdict": "maybe", "rationale": "hedging"}')
     ruling = HaikuResolver(client=client).witness_identity(_TRACK, _MATCH)
     assert ruling.verdict == "unsure"
+
+
+def test_witness_prompt_carries_a_second_acoustic_claim_when_given():
+    # #51: a second, independent acoustic identification is named in the prompt so
+    # the witness can weigh two acoustic sources, not just the video's metadata.
+    second = Match(title="Hello", artist="Adele", album="", confidence=1.0)
+    client = _FakeClient(reply='{"verdict": "consistent"}')
+    HaikuResolver(client=client).witness_identity(_TRACK, _MATCH, second)
+
+    text = client.messages.calls[0]["messages"][0]["content"][0]["text"]
+    assert "Second acoustic identification" in text
+    # The system prompt tells the model how to weigh two acoustic sources.
+    assert "second" in client.messages.calls[0]["system"].lower()
+
+
+def test_witness_prompt_omits_the_second_claim_when_there_is_none():
+    # Shazam-only: no second source ran, so the prompt names just the one.
+    client = _FakeClient(reply='{"verdict": "consistent"}')
+    HaikuResolver(client=client).witness_identity(_TRACK, _MATCH)  # second defaults to None
+
+    text = client.messages.calls[0]["messages"][0]["content"][0]["text"]
+    assert "Second acoustic identification" not in text

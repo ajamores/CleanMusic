@@ -62,6 +62,12 @@ class Match:
     album: str
     cover_art: bytes | None = None
     isrc: str | None = None
+    #: The MusicBrainz recording id, when the identifier supplies one directly
+    #: (AcoustID does; Shazam does not, giving an ISRC instead — #51). The album
+    #: waterfall resolves the canonical album from *either* handle, so an
+    #: AcoustID-identified Track hydrates its album through MusicBrainz (#45) without
+    #: the adapter making its own lookup. None when the identifier gives no id.
+    recording_mbid: str | None = None
     confidence: float = 0.0
 
 
