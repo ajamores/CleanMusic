@@ -90,12 +90,19 @@ class FakeDownloader:
 
 
 class FakeFingerprinter:
-    """Returns a preset Match (or None to simulate no identification)."""
+    """Returns a preset Match (or None to simulate no identification).
+
+    Records each Track it was asked to ``identify`` on ``calls``, so a whole-box
+    test can prove the second acoustic source (AcoustID, #51) was — or crucially was
+    *not* — consulted: the corroborated fast path must never reach it (#38).
+    """
 
     def __init__(self, match: Match | None):
         self._match = match
+        self.calls: list[Track] = []
 
     def identify(self, track: Track) -> Match | None:
+        self.calls.append(track)
         return self._match
 
 
@@ -109,9 +116,18 @@ class FakeAuthority:
     what — the Authority was consulted.
     """
 
-    def __init__(self, studio_album: str | None = None) -> None:
+    def __init__(
+        self,
+        studio_album: str | None = None,
+        recording_album: str | None = None,
+    ) -> None:
         self._studio_album = studio_album
+        #: The album the by-recording tier returns (AcoustID, #51); ``None`` mirrors
+        #: a MusicBrainz miss. Kept separate from ``studio_album`` so a test can prove
+        #: which handle — ISRC or recording id — the waterfall used.
+        self._recording_album = recording_album
         self.canonical_album_calls: list[str | None] = []
+        self.canonical_album_for_recording_calls: list[str | None] = []
 
     def tags_for(self, match: Match) -> Tags:
         return Tags(
@@ -124,6 +140,10 @@ class FakeAuthority:
     def canonical_album(self, isrc: str | None) -> str | None:
         self.canonical_album_calls.append(isrc)
         return self._studio_album
+
+    def canonical_album_for_recording(self, recording_mbid: str | None) -> str | None:
+        self.canonical_album_for_recording_calls.append(recording_mbid)
+        return self._recording_album
 
 
 class FakeResolver:
@@ -150,6 +170,10 @@ class FakeResolver:
         self._witness_raises = witness_raises
         self.resolve_calls: list[Match | None] = []
         self.witness_calls: list[Match] = []
+        #: The second acoustic identification (AcoustID, #51) passed to each witness
+        #: call, positionally aligned with ``witness_calls`` — ``None`` when no second
+        #: source ran. Lets a whole-box test assert the witness saw both claims.
+        self.witness_second_opinions: list[Match | None] = []
 
     def resolve(self, track: Track, match: Match | None) -> Match | None:
         self.resolve_calls.append(match)
@@ -157,8 +181,11 @@ class FakeResolver:
             return None
         return replace(match, album=self._album)
 
-    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+    def witness_identity(
+        self, track: Track, match: Match, second: Match | None = None
+    ) -> IdentityRuling:
         self.witness_calls.append(match)
+        self.witness_second_opinions.append(second)
         if self._witness_raises:
             raise RuntimeError("simulated Resolver failure")
         return IdentityRuling(verdict=self._verdict, rationale=f"fake: {self._verdict}")

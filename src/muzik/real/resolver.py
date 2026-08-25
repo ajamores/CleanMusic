@@ -80,20 +80,25 @@ class HaikuResolver:
         except Exception:
             return None
 
-    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+    def witness_identity(
+        self, track: Track, match: Match, second: Match | None = None
+    ) -> IdentityRuling:
         """Rule on whether ``match`` fits the Track's own evidence (ADR-0006).
 
         Reasons over the fingerprint identity and the Source's metadata — including
-        the thumbnail when one is available. Any failure or timeout degrades to
-        ``unsure`` so the batch never blocks (ADR-0002).
+        the thumbnail when one is available. ``second`` is an optional second,
+        independent acoustic identification (AcoustID, #51) weighed as evidence:
+        two acoustic sources agreeing is stronger than the video's own title/channel,
+        and their disagreement is a signal in itself. Any failure or timeout degrades
+        to ``unsure`` so the batch never blocks (ADR-0002).
         """
         try:
-            return self._witness(track, match)
+            return self._witness(track, match, second)
         except Exception:
             return IdentityRuling(verdict="unsure", rationale="witness call failed")
 
-    def _witness(self, track: Track, match: Match) -> IdentityRuling:
-        content: list[dict] = [{"type": "text", "text": _witness_prompt(track, match)}]
+    def _witness(self, track: Track, match: Match, second: Match | None) -> IdentityRuling:
+        content: list[dict] = [{"type": "text", "text": _witness_prompt(track, match, second)}]
         image = _fetch_image(track.thumbnail_url)
         if image is not None:
             data, media_type = image
@@ -116,6 +121,14 @@ class HaikuResolver:
                 "that evidence — i.e. the video really is that artist's recording of "
                 "that song, not a different song, a cover, or an impersonator "
                 "channel dressed in the artist's name. "
+                "You may also be given a SECOND, independent acoustic identification "
+                "from a different fingerprint service. Two acoustic sources are "
+                "evidence about what the audio actually is — stronger than the "
+                "video's own title or channel, which anyone can type. When both "
+                "acoustic sources agree, that strongly supports 'consistent'. When "
+                "they disagree, judge which (if either) the video's evidence "
+                "supports; if neither clearly fits, or you cannot tell, answer "
+                "'inconsistent' or 'unsure' so a human reviews it. "
                 'Reply with ONLY JSON {"verdict": "consistent"|"inconsistent"|'
                 '"unsure", "rationale": str}. Use "unsure" when the evidence is too '
                 "thin to tell. Keep the rationale to one short sentence."
@@ -125,16 +138,29 @@ class HaikuResolver:
         return _parse_ruling(_first_text(resp))
 
 
-def _witness_prompt(track: Track, match: Match) -> str:
-    """The text half of the witness call: the fingerprint set against the Source."""
+def _witness_prompt(track: Track, match: Match, second: Match | None = None) -> str:
+    """The text half of the witness call: the fingerprint(s) set against the Source.
+
+    Carries the primary fingerprint identification and, when a second independent
+    acoustic source ran (AcoustID, #51), its identification too — so the witness can
+    weigh two acoustic claims against the video's own evidence.
+    """
     tags = ", ".join(track.tags) if track.tags else "(none)"
     description = track.description.strip()
     if len(description) > _DESCRIPTION_LIMIT:
         description = description[:_DESCRIPTION_LIMIT] + "…"
+    second_block = (
+        "Second acoustic identification (an independent fingerprinter):\n"
+        f"  artist: {second.artist}\n"
+        f"  song:   {second.title}\n\n"
+        if second is not None
+        else ""
+    )
     return (
         "Fingerprint identification:\n"
         f"  artist: {match.artist}\n"
         f"  song:   {match.title}\n\n"
+        f"{second_block}"
         "Original video evidence:\n"
         f"  title:       {track.source_title}\n"
         f"  channel:     {track.uploader}\n"

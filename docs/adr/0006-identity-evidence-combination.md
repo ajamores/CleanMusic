@@ -39,3 +39,21 @@ When the fingerprint's identity is uncorroborated — or as a routine check on e
 - Options 2 and 3 both need a **downloader change first**: capture the video's description, tags, and thumbnail onto the Track (today only title/channel/duration survive). That is the gating prerequisite for any evidence-combining identity decision.
 - Option 3 realigns the code with CONTEXT.md's stated definition of the Resolver; options 1 and 2 would mean **amending CONTEXT.md** to admit the Resolver is album-only.
 - Whatever is chosen, `Match.confidence` from real Shazam should be treated as binary, not thresholded (see `docs/LEARNINGS.md`). #16 and #17 should be re-pointed at this ADR: their "revisit-when real confidence is observed" premise is answered — the answer is that confidence is not the signal.
+
+## Amendment (#51): a second acoustic source in the witness's evidence set
+
+The witness (option 3) reasons over one acoustic claim (Shazam) against the video's own metadata. But a comparison run showed Shazam and **AcoustID** catch tracks the other misses — complementary blind spots — and, more sharply, that the only independent signal the witness had *against* a confident-wrong Shazam was the video's metadata, which an impersonator types. A second *acoustic* source is evidence about what the audio actually **is**, derived from the sound rather than from a self-asserted title/channel. So AcoustID joins the witness's evidence set as a second fingerprint claim — **not** a blind fallback identifier; the AI still adjudicates.
+
+Shazam stays primary; AcoustID is the second opinion (the deliberate mirror of cleanmuzik's AcoustID-first ADR-019 — AcoustID's tags hydrate through rate-limited MusicBrainz, so it is kept off Muzik's speed-sensitive common path). Behaviour by case:
+
+- **Shazam miss, AcoustID hit** — AcoustID's candidate becomes the Match the witness evaluates (coverage rescue). With Shazam absent there is no second acoustic claim, so the witness sees AcoustID's alone.
+- **Both hit, agree** — two independent acoustic sources beat any metadata check; strong support for `consistent`.
+- **Both hit, disagree** — the witness breaks the tie against the video evidence, or routes to Review. This is what catches a confident-wrong Shazam that the video metadata happens to corroborate (the #16 impersonator shape), which a blind fallback would never see. The Shazam identity is never silently swapped for AcoustID's.
+- **Both miss** — Review. The AI cannot invent an identity from a thumbnail.
+
+The verdict vocabulary is unchanged (`consistent` / `inconsistent` / `unsure`): disagreement is handled by the witness's reasoning and the existing gate, not a new verdict.
+
+- **Cost discipline (#38).** AcoustID runs on the witness's *own* triggers — the uncorroborated path (where the witness already fires) plus the Shazam-miss path — never the corroborated fast path, which stays Shazam-only (no AI, no AcoustID, no MusicBrainz). The uncorroborated path already pays for the AI; AcoustID is a marginal add there. The miss path gains a cost, but only on Tracks already destined for Review — a "try harder" replacing a "give up".
+- **Album hydration depends on #45.** AcoustID returns a MusicBrainz recording id but no album; the id rides onto the Match, and the album waterfall's MusicBrainz tier (fixed in #45) hydrates the album *from the recording id* — the by-recording twin of the ISRC lookup — exactly as it does a Shazam Track. Crucially the waterfall runs only on the Match a Track is *tagged* from (the primary), so a second opinion the witness reads and discards never triggers a MusicBrainz round-trip: the adapter itself makes no album lookup, keeping AcoustID a marginal add on the uncorroborated path (#38). A miss degrades to the Resolver tier.
+- **Degradation holds.** No key, no `fpcalc`, or any fingerprint/network error makes AcoustID a *miss* (the witness simply falls back to Shazam alone), never a raise — the batch never blocks.
+- **New seam, same shape.** `AcoustIdFingerprinter` implements the existing `Fingerprinter` protocol; it is injected as a second, defaulted-inert provider (`Providers.acoustid`), so every path that doesn't wire it behaves exactly as before.

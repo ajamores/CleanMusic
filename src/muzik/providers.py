@@ -79,6 +79,16 @@ class Authority(Protocol):
         """The recording's canonical studio album by ISRC, or None on a miss."""
         ...
 
+    def canonical_album_for_recording(self, recording_mbid: str | None) -> str | None:
+        """The canonical studio album for a MusicBrainz recording id, or None.
+
+        The by-recording twin of ``canonical_album``, for an identifier that hands
+        back a recording id directly (AcoustID, #51) rather than an ISRC — it skips
+        the ISRC→recording resolution and browses the recording's releases straight
+        away. Same studio-album filter, same never-crash contract.
+        """
+        ...
+
 
 class Resolver(Protocol):
     """The AI step that reasons over a Track's evidence (ADR-0006).
@@ -91,13 +101,22 @@ class Resolver(Protocol):
 
     def resolve(self, track: Track, match: Match | None) -> Match | None: ...
 
-    def witness_identity(self, track: Track, match: Match) -> IdentityRuling:
+    def witness_identity(
+        self, track: Track, match: Match, second: Match | None = None
+    ) -> IdentityRuling:
         """Rule on whether ``match`` is consistent with the Track's own evidence.
 
         Reasons over the fingerprint Match *and* the full download — title,
         channel, description, tags, and thumbnail (a multimodal call) — and returns
         an :class:`IdentityRuling`. Must degrade to an ``unsure`` verdict on any
         failure or timeout rather than raise: a batch never blocks (ADR-0002).
+
+        ``second`` is an optional *second, independent acoustic identification* of
+        the same Track — a different fingerprinter's Match (AcoustID, #51, ADR-0006).
+        When present it is weighed as evidence about what the audio actually is:
+        two acoustic sources agreeing is stronger than the video's own title/channel
+        (which an impersonator can type), and their disagreement is itself a signal.
+        ``None`` when no second source ran (the Shazam-only case).
         """
         ...
 
