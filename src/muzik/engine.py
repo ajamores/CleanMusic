@@ -38,6 +38,7 @@ from muzik.providers import (
     ReviewPrompter,
     ReviewQueue,
     TagWriter,
+    ThumbnailFetcher,
 )
 
 
@@ -66,6 +67,18 @@ class _NullPlaylistWriter:
         return None
 
 
+class _NullThumbnailFetcher:
+    """Fetches nothing — the default when a caller wires no thumbnail fallback.
+
+    Keeps the artwork fallback (#52) inert unless a real fetcher is injected, so a
+    Track's cover art is only ever filled from a fetcher a caller opted into. Real
+    runs wire ``HttpThumbnailFetcher`` (``cli.py``); tests inject a fake.
+    """
+
+    def fetch(self, url: str) -> bytes | None:  # noqa: D102
+        return None
+
+
 @dataclass(frozen=True)
 class Providers:
     """The injected providers the engine runs against."""
@@ -77,6 +90,7 @@ class Providers:
     tagwriter: TagWriter
     review_queue: ReviewQueue = field(default_factory=_NullReviewQueue)
     playlist_writer: PlaylistWriter = field(default_factory=_NullPlaylistWriter)
+    thumbnail_fetcher: ThumbnailFetcher = field(default_factory=_NullThumbnailFetcher)
 
 
 @dataclass(frozen=True)
@@ -179,9 +193,10 @@ def _process_track(track: Track, providers: Providers) -> TrackResult:
     """The pipeline for a single Track: identify → album → gate → write."""
     match = providers.fingerprinter.identify(track)
     if match is None:
-        return _review(track, "no fingerprint match")
+        return _best_effort_review(track, "no fingerprint match", providers)
     tags = _album_waterfall(track, match, providers)
     tags, reason, conflict = _confidence_gate(track, match, tags, providers.resolver)
+    tags = _with_thumbnail_fallback(track, tags, providers)
     output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
@@ -306,7 +321,7 @@ def _reidentify(item: ReviewItem, hint: str, providers: Providers) -> TrackResul
     track = replace(_track_from_item(item), source_title=hint)
     seed = _match_from_hint(hint)
     if seed is None:
-        return _review(track, "a hint needs a title to re-identify")
+        return _best_effort_review(track, "a hint needs a title to re-identify", providers)
     match = providers.fingerprinter.identify(track)
     if match is None or not _hint_corroborates(match, hint):
         match = seed
@@ -630,6 +645,46 @@ def _identity_verdict(track: Track, match: Match, resolver: Resolver) -> Identit
         return "unsure"
 
 
+def _with_thumbnail_fallback(track: Track, tags: Tags, providers: Providers) -> Tags:
+    """Fill empty cover art with the video thumbnail so no file ships bare (#52).
+
+    Purely additive (ADR-0002 note): only when the Tags carry no real ``cover_art``
+    *and* the Track names a thumbnail. Real album art is never overridden — the
+    confident, correctly-tagged common case is untouched. A fetch miss or timeout
+    leaves the Tags bare rather than raising: the same never-block contract as the
+    other network tiers. The review-clear paths reconstruct a Track with no
+    ``thumbnail_url``, so this is a no-op there — it fills only the batch path.
+    """
+    if tags.cover_art is not None or not track.thumbnail_url:
+        return tags
+    data = providers.thumbnail_fetcher.fetch(track.thumbnail_url)
+    if data is None:
+        return tags
+    return replace(tags, cover_art=data)
+
+
+def _source_only_tags(track: Track) -> Tags | None:
+    """Best-effort Tags from the Source alone, for a Track with no Match (#52).
+
+    Prefer the Source's own "Artist - Title" split (the same parse the gate's
+    provisional path uses, ``_provisional_from_source``); when the title carries no
+    such structure, fall back to the whole title with the normalised channel as
+    artist. That whole-title tier is deliberately *extra* here and absent from the
+    gate's ``_unverified``: the gate always has a Match to keep when the Source
+    won't parse, but a no-Match Track has nothing else — so writing the raw title
+    is the only alternative to shipping bare. ``None`` only when the Source names
+    no title at all, and then there is nothing to write.
+    """
+    uploader_artist = _normalise_uploader(track.uploader)
+    provisional = _provisional_from_source(track.source_title, uploader_artist)
+    if provisional is not None:
+        return provisional
+    title = _clean(track.source_title)
+    if not title:
+        return None
+    return Tags(title=title, artist=uploader_artist, album="", verified=False)
+
+
 def _write(track: Track, tags: Tags, providers: Providers) -> Path:
     """Write Tags into the Track's file, returning its path.
 
@@ -638,12 +693,31 @@ def _write(track: Track, tags: Tags, providers: Providers) -> Path:
     return providers.tagwriter.write(track, tags)
 
 
-def _review(track: Track, reason: str) -> TrackResult:
-    """A Track that could not be tagged, routed to the Review queue."""
+def _best_effort_review(track: Track, reason: str, providers: Providers) -> TrackResult:
+    """A Track with no fingerprint Match — tagged best-effort, then routed to Review.
+
+    No Track ships bare (#52): rather than write nothing, fill Tags from the Source
+    itself (title/artist) plus the thumbnail as art, and still enqueue the result
+    to Review as an unverified guess (this is the ADR-0002 relaxation — an
+    unidentified Track is now tagged best-effort, no longer left untagged). When
+    the Source offers no usable title to write (``_source_only_tags`` is ``None``),
+    nothing is written and the entry is queued with no Tags, as before.
+    """
+    tags = _source_only_tags(track)
+    if tags is None:
+        return TrackResult(
+            source_url=track.source_url,
+            tags=None,
+            output_path=None,
+            status="review",
+            reason=reason,
+        )
+    tags = _with_thumbnail_fallback(track, tags, providers)
+    output_path = _write(track, tags, providers)
     return TrackResult(
         source_url=track.source_url,
-        tags=None,
-        output_path=None,
-        status="review",
+        tags=tags,
+        output_path=output_path,
+        status="tagged",
         reason=reason,
     )

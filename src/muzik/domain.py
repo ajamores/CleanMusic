@@ -126,7 +126,10 @@ class TrackResult:
     source_url: str
     tags: Tags | None
     output_path: Path | None
-    #: "tagged" when a file was written, "review" when nothing was (no Match / skip).
+    #: "tagged" when a file was written, "review" when nothing was. An unidentified
+    #: Track is now written best-effort from the Source (#52), so it is "tagged"
+    #: with a ``reason`` set; only a Track with no usable Source identity (or a
+    #: skip) stays "review".
     status: Literal["tagged", "review"]
     #: Why a Track is in the Review queue; None only for a verified, confirmed Track.
     #: A provisionally-written Track ("tagged" but unverified) still carries a reason.

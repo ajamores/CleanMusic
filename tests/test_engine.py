@@ -513,17 +513,22 @@ def test_confidence_gate_ignores_stopwords_in_title_agreement():
 
 
 def test_no_match_routes_to_the_review_queue():
+    # No fingerprint Match, but the Source names an identity ("Fake Video"), so the
+    # Track is now written best-effort (#52) and still routed to Review.
     writer = FakeTagWriter()
     results = run(Source(url="https://youtu.be/xyz"), _providers(None, writer))
 
     assert len(results) == 1
     result = results[0]
-    assert result.tags is None
-    assert result.output_path is None
-    assert result.status == "review"
+    assert result.tags is not None
+    assert result.tags.title == "Fake Video"
+    assert result.tags.verified is False
+    assert result.output_path is not None
+    assert result.status == "tagged"
     assert result.reason == "no fingerprint match"
     # No Match was heard, so there is no rejected-Match conflict to show (#24) —
     # the plain reason stands on its own.
     assert result.conflict is None
-    # Nothing was written for an unidentified Track.
-    assert writer.written == []
+    # Written best-effort from the Source; no thumbnail wired, so no cover art.
+    assert len(writer.written) == 1
+    assert writer.written[0][1].cover_art is None
