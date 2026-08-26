@@ -138,6 +138,44 @@ def test_smoke_archived_rerun_records_nothing_new(out_dir):
     assert again == []
     assert rerun.archive_skips == [_VIDEO_URL_WITH_LIST]
     assert rerun.skipped == []  # nothing-new is not a failure
+    # The fetch was recorded in the Muzik-owned manifest (#49) — id per line,
+    # no extractor key — which is what the re-run just matched against.
+    manifest = (out_dir / ".muzik-manifest.txt").read_text(encoding="utf-8")
+    assert _VIDEO_ID in manifest.splitlines()
+
+
+def test_smoke_playlist_rerun_skips_via_flat_entries(out_dir):
+    # Case 4 (#49): a playlist re-run. The first expansion fetches both Tracks; the
+    # second must pull nothing and report the re-run. This drives the match_filter's
+    # *incomplete* path live — flat playlist entries are skipped by manifest id
+    # before their pages are re-extracted, the cost profile download_archive had.
+    first = YtDlpDownloader(out_dir=out_dir, expand_playlist=True)
+    fresh = first.download(Source(url=_PLAYLIST_URL))
+    assert len(fresh) == 2, "the first expansion should fetch both Tracks"
+
+    rerun = YtDlpDownloader(out_dir=out_dir, expand_playlist=True)
+    again = rerun.download(Source(url=_PLAYLIST_URL))
+
+    assert again == []
+    assert rerun.archive_skips == [_PLAYLIST_URL]
+    assert rerun.skipped == []
+
+
+def test_smoke_a_legacy_yt_dlp_archive_still_skips_the_rerun(out_dir):
+    # Case 5 (#49 back-compat): a library fetched before the Muzik manifest has
+    # only yt-dlp's ``<extractor> <id>`` archive on disk. Its ids must still count
+    # as fetched — read-only, frozen — so the re-run skips without a download.
+    out_dir.mkdir(parents=True)
+    (out_dir / ".download-archive.txt").write_text(
+        f"youtube {_VIDEO_ID}\n", encoding="utf-8"
+    )
+
+    downloader = YtDlpDownloader(out_dir=out_dir)
+    tracks = downloader.download(Source(url=_VIDEO_URL))
+
+    assert tracks == []
+    assert downloader.archive_skips == [_VIDEO_URL]
+    assert not _audio_files(out_dir), "a legacy-archived Track was re-downloaded"
 
 
 def test_smoke_playlist_expansion_yields_both_tracks(out_dir):

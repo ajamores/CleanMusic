@@ -116,9 +116,18 @@ class YtDlpDownloader:
         #: ``list=`` is dropped. ``--playlist`` sets this True for one run to expand
         #: the list; it is never persisted.
         self._expand_playlist = expand_playlist
-        #: The download archive yt-dlp records fetched ids in (#8). Kept as an
-        #: attribute so the archive-skip check (#24) can consult the same file.
-        self._archive_path = self._out_dir / ".download-archive.txt"
+        #: The Muzik-owned download manifest (#49): one video id per line, written
+        #: by Muzik itself after each successful fetch. Owning the format (rather
+        #: than piggy-backing yt-dlp's extractor-keyed archive) is what keeps re-run
+        #: detection independent of yt-dlp internals — the coupling behind #28/#29.
+        self._manifest_path = self._out_dir / ".muzik-manifest.txt"
+        #: yt-dlp's old ``<extractor> <id>`` archive, read-only for back-compat
+        #: (#49): pre-manifest fetches are recorded here. Muzik no longer lets
+        #: yt-dlp write it, so its format is frozen — it only contributes ids.
+        self._legacy_archive_path = self._out_dir / ".download-archive.txt"
+        #: The already-fetched ids, lazy-loaded from the manifest (+ legacy archive)
+        #: on first use and kept current in memory as this run records new fetches.
+        self._fetched_ids: set[str] | None = None
         #: ``(title_or_url, reason)`` for every Source skipped this batch.
         self.skipped: list[tuple[str, str]] = []
         #: Source URLs that yielded no Track because every entry was already in the
@@ -130,10 +139,62 @@ class YtDlpDownloader:
         #: Video ids already announced this batch, so the progress hook prints each
         #: Track's title once (#24).
         self._announced: set[str] = set()
+        #: Video ids the match_filter skipped during the current ``download`` call.
+        #: Confirmed live (#49): a filter skip suppresses only the *download* — a
+        #: skipped single video's info dict is still returned in full — so entry
+        #: mapping must drop these ids itself or it would emit a Track pointing at
+        #: audio that was never fetched.
+        self._filter_skipped: set[str] = set()
         #: The expanded playlist's own title (#25), set during ``download`` only when
         #: a ``--playlist`` run resolved a Source to a playlist. ``None`` in single
         #: mode — the engine writes no ``.m3u8`` then, there being no list to preserve.
         self.playlist_title: str | None = None
+
+    def _skip_already_fetched(self, info: dict, *, incomplete: bool = False) -> str | None:
+        """yt-dlp match_filter (#49): skip an entry whose video id the manifest
+        already holds; a reason string skips, None downloads.
+
+        Accepting ``incomplete`` opts in to being consulted on flat playlist
+        entries too, so an archived entry is skipped before its page is extracted
+        (the cost profile ``download_archive`` had). A flat entry with no id yet
+        is let through — the complete pass decides it.
+        """
+        video_id = info.get("id")
+        if video_id and video_id in self._fetched():
+            self._filter_skipped.add(video_id)
+            return f"{video_id} is already in the Muzik download manifest"
+        return None
+
+    def _record_fetched(self, filepath: str) -> None:
+        """yt-dlp post hook (#49): record a fetched video id in the manifest.
+
+        Called with the final filepath after all postprocessing — the same point
+        yt-dlp's own archive recorded at — so only a fully-landed Track is
+        recorded. The stem is the id (outtmpl is ``%(id)s.%(ext)s``). The id also
+        joins the in-memory set, so the filter skips it for the rest of this run.
+
+        A write failure is swallowed: the id stays recorded in memory (no
+        re-download this run) and is simply re-fetched next run. An exception
+        escaping a post hook becomes a yt-dlp error, so bookkeeping raising here
+        would abort the very batch it must never abort (#32).
+        """
+        video_id = Path(filepath).stem
+        if not video_id or video_id in self._fetched():
+            return
+        self._fetched().add(video_id)
+        try:
+            with self._manifest_path.open("a", encoding="utf-8") as manifest:
+                manifest.write(f"{video_id}\n")
+        except OSError as error:
+            logger.warning("could not record %s in the download manifest: %s",
+                           video_id, error)
+
+    def _fetched(self) -> set[str]:
+        """The already-fetched ids: loaded from disk once per Downloader, then kept
+        current in memory as this run records fetches."""
+        if self._fetched_ids is None:
+            self._fetched_ids = self._archived_ids()
+        return self._fetched_ids
 
     def _announce_download(self, status: dict) -> None:
         """yt-dlp progress hook: print each Track's resolved title once, so a fetch
@@ -182,10 +243,13 @@ class YtDlpDownloader:
             # flips this to expand the list.
             "noplaylist": not self._expand_playlist,
             # Re-running a Source must not re-download Tracks already fetched (#8).
-            # yt-dlp records each downloaded video's id here and skips any it has
-            # already seen on a later run; skipped entries come back falsy and are
-            # dropped in ``download``.
-            "download_archive": str(self._archive_path),
+            # Decided by the Muzik-owned manifest via match_filter (#49), not
+            # yt-dlp's extractor-keyed ``download_archive`` (the #28/#29 coupling):
+            # a reason string skips the entry, None lets it download.
+            "match_filter": self._skip_already_fetched,
+            # Each fully-landed Track's id is recorded in the manifest — after all
+            # postprocessing, the point yt-dlp's own archive recorded at (#49).
+            "post_hooks": [self._record_fetched],
         }
         if self._cookies is not None:
             opts["cookiefile"] = str(self._cookies)
@@ -194,6 +258,7 @@ class YtDlpDownloader:
     def download(self, source: Source) -> list[Track]:
         self._out_dir.mkdir(parents=True, exist_ok=True)
         self._announced.clear()  # fresh per Source, so each title announces once
+        self._filter_skipped.clear()  # skips are per download call, like announcements
         try:
             with yt_dlp.YoutubeDL(self._build_opts()) as ydl:
                 if not self._expand_playlist and _is_bare_playlist(ydl, source.url):
@@ -226,16 +291,24 @@ class YtDlpDownloader:
             return []
 
         tracks = self._tracks_from_info(info, source.url)
-        if not tracks and self._all_archived(source.url):
-            # Every entry was already in the archive (a re-run, #8), not an empty or
-            # unplayable Source (#24). Record it so the CLI can say so rather than
-            # emitting a silent, bare 0/0 summary.
+        if not tracks and self._filter_skipped:
+            # Nothing was pulled and the filter skipped at least one entry: a
+            # re-run with nothing new (#8), not an empty or unplayable Source
+            # (#24). Record it so the CLI can say so rather than emitting a
+            # silent, bare 0/0 summary. The filter's own skips are the evidence —
+            # no second, archive-free resolve of the Source (#49): the old
+            # resolve-and-compare depended on the same extraction internals
+            # (lazy ``process=False`` generators, flat entries) this ticket
+            # exists to stop leaning on, and cost a network round-trip per
+            # empty result.
             self.archive_skips.append(source.url)
         return tracks
 
     def _tracks_from_info(self, info: dict | None, url_fallback: str) -> list[Track]:
         """Map a yt-dlp result to Tracks. None / all-falsy entries → no Tracks:
-        yt-dlp downloaded nothing (a re-run, or an unplayable Source)."""
+        yt-dlp downloaded nothing (a re-run, or an unplayable Source). An entry the
+        match_filter skipped this call is dropped too — its info still comes back
+        in full (#49), but no audio was fetched for it."""
         suffix = self._output_format.file_suffix
         if info is None:
             entries: list = []
@@ -246,65 +319,27 @@ class YtDlpDownloader:
         return [
             _track_from_entry(entry, self._out_dir, suffix, url_fallback)
             for entry in entries
-            if entry
+            if entry and entry.get("id") not in self._filter_skipped
         ]
 
-    def _all_archived(self, url: str) -> bool:
-        """True when the Source resolves to video ids that are ALL already in the
-        download archive — a re-run with nothing new, as opposed to an empty Source.
-
-        Only reached when a download pulled nothing. Resolve the Source's ids first,
-        then match them against the archive the batch maintains. An empty Source
-        resolves to no ids; an unplayable-but-*new* Source to ids that are not in the
-        archive — so only a genuine re-run reports here.
-
-        Matching is by **video id**, not yt-dlp's own ``in_download_archive``: a URL
-        that carries a ``list=`` classifies the entry under the ``YoutubeTab``
-        extractor, while the download recorded it under ``Youtube`` — so the two
-        archive keys disagree and the API check misses. The video id is the same
-        either way, and it is what "already fetched" really means.
-        """
-        ids = self._resolve_entry_ids(url)
-        if not ids:
-            return False
-        archived = self._archived_ids()
-        return all(video_id in archived for video_id in ids)
-
-    def _resolve_entry_ids(self, url: str) -> list[str]:
-        """The Source's video ids, resolved *archive-free* so an already-fetched
-        entry still appears (a ``download_archive`` in the opts makes yt-dlp filter
-        it out during extraction, returning ``None``). Flat, so a playlist isn't
-        re-extracted in full. Empty on a Source that no longer resolves."""
-        opts: dict = {
-            "quiet": True,
-            "extract_flat": "in_playlist",
-            "noplaylist": not self._expand_playlist,
-        }
-        if self._cookies is not None:
-            opts["cookiefile"] = str(self._cookies)
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False, process=False)
-                if not info:
-                    return []
-                # With process=False, info["entries"] is a LAZY generator: the real
-                # page-by-page extraction runs as it is iterated, so materialise the
-                # ids *inside* the try. A DownloadError mid-pagination (a transient
-                # network/HTTP error, a page that 403s) then degrades to "not a re-run"
-                # here, rather than escaping to abort the batch (#32 / ADR-0002).
-                entries = info["entries"] if "entries" in info else [info]
-                return [entry["id"] for entry in entries if entry and entry.get("id")]
-        except DownloadError:
-            return []  # the Source no longer resolves — treat as empty, not a re-run
-
     def _archived_ids(self) -> set[str]:
-        """The video ids already in the download archive. Its lines are
-        ``<extractor> <id>`` (#8); the id is the last field, extractor aside."""
+        """The video ids already fetched: the Muzik manifest (one id per line, #49)
+        unioned with the frozen legacy yt-dlp archive (``<extractor> <id>`` lines,
+        #8 — the id is the last field, extractor aside).
+
+        Either file failing to read — missing, permission denied, unexpectedly a
+        directory — simply contributes nothing, degrading to "not a re-run".
+        Archive bookkeeping must never abort the batch (#32).
+        """
+        ids: set[str] = set()
         try:
-            text = self._archive_path.read_text(encoding="utf-8")
+            manifest = self._manifest_path.read_text(encoding="utf-8")
+            ids.update(line.strip() for line in manifest.splitlines() if line.strip())
         except OSError:
-            # Any read failure — the file is missing, permission denied, or the path
-            # is unexpectedly a directory — means no usable archive, so degrade to
-            # "not a re-run". Archive bookkeeping must never abort the batch (#32).
-            return set()
-        return {line.split()[-1] for line in text.splitlines() if line.strip()}
+            pass
+        try:
+            legacy = self._legacy_archive_path.read_text(encoding="utf-8")
+            ids.update(line.split()[-1] for line in legacy.splitlines() if line.strip())
+        except OSError:
+            pass
+        return ids
