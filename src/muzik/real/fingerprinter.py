@@ -2,7 +2,8 @@
 
 shazamio is async; the seam is sync, so this bridges with asyncio.run. Tags and
 cover art are taken from Shazam's own result (ADR-0002 identifies by fingerprint,
-not by parsing the Source title).
+not by parsing the Source title), parsed through shazamio's own ``Serialize``
+dataclasses rather than hand-rolled dict walking (#58).
 """
 
 from __future__ import annotations
@@ -13,7 +14,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from shazamio import Shazam
+from shazamio import Serialize, Shazam
+from shazamio.schemas.models import SongSection, TrackInfo
 
 from muzik.domain import Match, Track
 
@@ -26,15 +28,59 @@ def _to_wav(src: Path, dst: Path) -> None:
     )
 
 
-def _dig(payload: dict, key: str) -> str | None:
-    """Pull a labelled value (Album, ISRC, ...) out of Shazam's metadata sections."""
-    if key.lower() == "isrc" and payload.get("isrc"):
-        return payload["isrc"]
-    for section in payload.get("sections", []):
-        for meta in section.get("metadata", []) or []:
-            if str(meta.get("title", "")).lower() == key.lower():
-                return meta.get("text")
+def _labelled(info: TrackInfo, label: str) -> str | None:
+    """A labelled value (Album, ISRC, ...) from the SONG section's metadata rows.
+
+    Shazam has no named album field anywhere in its response — such values only
+    appear as ``SongMetadata`` rows — so a label match remains, but over
+    ``Serialize``'s typed dataclasses instead of an untyped dict walk.
+    """
+    for section in info.sections or []:
+        if isinstance(section, SongSection):
+            for meta in section.metadata:
+                if meta.title.lower() == label.lower():
+                    return meta.text
     return None
+
+
+def _to_match(out: dict) -> Match | None:
+    """Parse a raw ``recognize`` response into a Match, or None for a miss.
+
+    ``Serialize.track`` takes the response's ``track`` part (verified live,
+    2026-08-26, shazamio 0.8.1). ``Serialize.full_track`` parses the whole
+    response too, but its envelope makes unrelated fields fatal — a missing
+    ``tagid`` would zero the Match — so the narrower serializer is the safer fit.
+    Two fields the serializer does not deliver stay raw-dict reads by their
+    stable named keys: ``TrackInfo`` has no isrc field, and its ``photo_url`` is
+    declared ``init=False`` so the factory never populates it. A ``track`` the
+    serializer rejects degrades to those same raw keys — one drifted corner must
+    not zero the whole Match, and the batch never blocks (ADR-0002).
+    """
+    raw_track = out.get("track") or {}
+    if not raw_track:
+        return None
+
+    try:
+        info = Serialize.track(data=raw_track)
+        title = info.title
+        artist = info.subtitle
+        album = _labelled(info, "Album") or ""
+        isrc_row = _labelled(info, "ISRC")
+    except Exception:
+        title = str(raw_track.get("title") or "")
+        artist = str(raw_track.get("subtitle") or "")
+        album = ""
+        isrc_row = None
+
+    images = raw_track.get("images") or {}
+    return Match(
+        title=title,
+        artist=artist,
+        album=album,
+        cover_art=_fetch(images.get("coverarthq") or images.get("coverart")),
+        isrc=raw_track.get("isrc") or isrc_row,
+        confidence=1.0,
+    )
 
 
 def _fetch(url: str | None) -> bytes | None:
@@ -59,17 +105,4 @@ class ShazamFingerprinter:
                 out = await Shazam().recognize(str(wav))
             except Exception:
                 return None
-
-        shazam_track = out.get("track") or {}
-        if not shazam_track:
-            return None
-
-        images = shazam_track.get("images", {}) or {}
-        return Match(
-            title=shazam_track.get("title", ""),
-            artist=shazam_track.get("subtitle", ""),
-            album=_dig(shazam_track, "Album") or "",
-            cover_art=_fetch(images.get("coverarthq") or images.get("coverart")),
-            isrc=_dig(shazam_track, "ISRC"),
-            confidence=1.0,
-        )
+        return _to_match(out)
