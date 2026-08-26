@@ -28,3 +28,19 @@ The three deferred rows share one prerequisite: a **known-artist catalog** (Musi
 - The normaliser is a pure function (`muzik.artist`), unit-tested directly (`tests/test_artist.py`) — the fiddly branch logic the ticket flagged as worth cracking the box open for.
 - It is applied at the engine's single write choke point (`engine._write`), which returns the canonicalised Tags, so the file, the Review queue entry, and a `--playlist` run's `.m3u8` all carry the same artist — verified and provisional paths alike.
 - A future catalog-backed pass can layer case/diacritic/romanisation folding on top without revisiting this one: this pass only ever *tidies*, never *chooses between spellings*, so the two compose.
+
+## Amendment — the credit's *home*, not just its form (#56, 2026-08-25)
+
+The original pass tidied a feature credit **in place** in the artist field (`Drake ft. Rihanna feat. Rihanna` → `Drake feat. Rihanna`). That fixes the *form* but leaves the credit in the wrong field: a player that groups by the artist tag still splinters one artist into `Drake`, `Drake feat. Rihanna`, `Drake feat. Future` — the very fragmentation US#26 set out to prevent, one field over. Every reference tagger (MusicBrainz/Picard, Apple Music, streaming) uses one policy: **artist = primary artist only; the featured credit lives in the track title** as `(feat. X)`. This repo already trusts MusicBrainz as its Authority, so keeping `feat.` in the artist field is a second, conflicting standard.
+
+**Decision.** `muzik.artist.place_feature_credit(title, artist)` operates on the `(title, artist)` pair (a superset of the artist-only `normalise_artist`, which it calls first — so #47's in-place tidy still runs on every write path). When the artist carries a *clear* featured clause, it moves that clause into the title as one `(feat. X)` and reduces the artist to the primary. It is applied at the same single write choke point (`engine._write`), so verified and provisional Tags alike are covered.
+
+**Same conservative bias, held tighter.** Moving text *between* fields is riskier than tidying one in place, so the bar to act is higher:
+
+- **Never duplicate.** If the title already names every featured artist (Shazam sometimes supplies `(feat. X)` in the title), the credit is only *stripped* from the artist — never a second copy appended. Matched across feature forms and case-insensitively.
+- **Never guess across a disagreement.** If the title carries a *different* feature clause (naming someone the artist field does not, or only partially overlapping), both fields are left as they are and the artist keeps its #47-normalised credit — an untidy pair beats a wrong cross-field edit.
+- **Only a clear clause moves.** A bare `feat. X` with no primary to anchor on is left alone, exactly as `normalise_artist` leaves it.
+
+The featured names are parsed by the same #47 machinery, so the guarantees carry over unchanged: the primary artist is never split (`Simon & Garfunkel feat. X`), and a featured segment is never split on its own commas (`feat. Tyler, The Creator`).
+
+**Where it earns its keep.** In practice the mess appears on the YouTube-title-parsing (provisional) path; Shazam usually returns a clean primary artist already. That is the path this most affects.

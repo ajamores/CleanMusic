@@ -62,6 +62,47 @@ def test_happy_path_tags_come_from_the_fingerprinter():
     assert writer.written[0][1].title == "Envy"
 
 
+def test_write_moves_a_featured_credit_from_the_artist_into_the_title():
+    # A Match whose artist carries a feature credit is written primary-only, with
+    # the credit relocated into the title (#56) — verified at the single write
+    # choke point, so it covers every write path, not just this one.
+    match = Match(
+        title="Take Care",
+        artist="Drake feat. Rihanna",
+        album="Take Care",
+        confidence=0.99,
+    )
+    writer = FakeTagWriter()
+    results = run(Source(url="https://youtu.be/abc"), _providers(match, writer))
+
+    result = results[0]
+    assert result.tags is not None
+    assert result.tags.title == "Take Care (feat. Rihanna)"
+    assert result.tags.artist == "Drake"
+    # The writer received the relocated Tags, not the raw Match.
+    assert writer.written[0][1].title == "Take Care (feat. Rihanna)"
+    assert writer.written[0][1].artist == "Drake"
+
+
+def test_write_moves_a_featured_credit_on_the_provisional_path_too():
+    # The provisional (YouTube-title-parse) path is where this earns its keep (#56):
+    # with no Match, best-effort Tags are parsed from the Source's "Artist - Title",
+    # so a feature credit in the artist half must relocate into the title as well.
+    writer = FakeTagWriter()
+    results = run(
+        Source(url="https://youtu.be/xyz"),
+        _providers(None, writer, source_title="Drake feat. Rihanna - Take Care"),
+    )
+
+    result = results[0]
+    assert result.tags is not None
+    assert result.tags.verified is False
+    assert result.tags.title == "Take Care (feat. Rihanna)"
+    assert result.tags.artist == "Drake"
+    assert writer.written[0][1].title == "Take Care (feat. Rihanna)"
+    assert writer.written[0][1].artist == "Drake"
+
+
 def test_confidence_gate_verifies_a_match_that_agrees_with_the_source_title():
     # The Source's own title echoes the Match ("Envy" appears in it), so the
     # gate confirms it: verified Tags, straight from the Match, no marker.
