@@ -19,11 +19,11 @@ from muzik.domain import (
     Track,
 )
 from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
-from muzik.providers import PlaylistInSingleModeError, Resolver
+from muzik.providers import Fingerprinter, PlaylistInSingleModeError, Resolver
 from muzik.real.acoustid import AcoustIdFingerprinter
 from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
 from muzik.real.downloader import YtDlpDownloader
-from muzik.real.fingerprinter import ShazamFingerprinter
+from muzik.real.fingerprinter import RateLimitedFingerprinter, ShazamFingerprinter
 from muzik.real.images import HttpThumbnailFetcher
 from muzik.real.playlist import M3u8PlaylistWriter
 from muzik.real.resolver import HaikuResolver
@@ -72,13 +72,27 @@ def _build_resolver() -> Resolver:
     return HaikuResolver()
 
 
-def _build_acoustid() -> AcoustIdFingerprinter:
+#: Minimum seconds between Shazam ``recognize`` starts (#63). Calls still overlap
+#: (only their starts are spaced), so at ~2s per recognize this costs a 4-worker
+#: batch little wall-clock while capping the request rate at 1/s from this IP —
+#: the same figure the MusicBrainz tier has run safely at. The slice run of the
+#: seeding batch (#66) is where a smaller interval would be measured and argued.
+_SHAZAM_MIN_INTERVAL = 1.0
+
+#: AcoustID asks applications to stay under ~3 requests/second; it is consulted
+#: only on the witness's unsure/miss paths, so this spacing is rarely even felt.
+_ACOUSTID_MIN_INTERVAL = 0.35
+
+
+def _build_acoustid() -> Fingerprinter:
     """The second acoustic source (AcoustID, #51), reported once when disabled.
 
     Like the Resolver, it self-disables without a key: ``AcoustIdFingerprinter``
     identifies nothing when ``ACOUSTID_API_KEY`` is absent, so the identity witness
     simply falls back to Shazam alone. The note tells the user the second witness is
-    off (and that ``fpcalc`` is also required — see docs/DEVELOPMENT.md).
+    off (and that ``fpcalc`` is also required — see docs/DEVELOPMENT.md). A keyed
+    AcoustID is rate-limited like Shazam (#63); a keyless one is left bare — its
+    instant ``None`` needs no spacing.
     """
     if not os.environ.get("ACOUSTID_API_KEY"):
         print(
@@ -86,7 +100,13 @@ def _build_acoustid() -> AcoustIdFingerprinter:
             "the second acoustic witness (AcoustID) is disabled; identity checks use "
             "Shazam alone."
         )
-    return AcoustIdFingerprinter()
+        return AcoustIdFingerprinter()
+    # For AcoustID the wrapper contributes *spacing only*: the adapter swallows
+    # its own failures to a miss (see acoustid.py), so the retry path never fires.
+    # Deliberate — a second opinion is optional evidence, not worth retry latency.
+    return RateLimitedFingerprinter(
+        AcoustIdFingerprinter(), min_interval=_ACOUSTID_MIN_INTERVAL
+    )
 
 
 def _build_downloader(
@@ -106,7 +126,12 @@ def _build_providers(
     tagwriter = Mp4TagWriter() if fmt is OutputFormat.M4A else Mp3TagWriter()
     return Providers(
         downloader=downloader,
-        fingerprinter=ShazamFingerprinter(),
+        # Spaced and retried (#63): a ~400-Track batch must not fire hundreds of
+        # rapid recognize calls from one IP, and a transient failure retries with
+        # backoff instead of silently flooding the Review queue as misses.
+        fingerprinter=RateLimitedFingerprinter(
+            ShazamFingerprinter(), min_interval=_SHAZAM_MIN_INTERVAL
+        ),
         # A playlist runs Tracks concurrently (#8), so the MusicBrainz tier is
         # spaced to ~1 req/sec — its documented rate limit (ADR-0002).
         authority=RateLimitedAuthority(ShazamOwnAuthority(), min_interval=1.0),
