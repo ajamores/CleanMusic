@@ -14,6 +14,10 @@ _Avoid_: link, URL, input
 One downloaded audio file — the unit of output, and the thing that gets tagged.
 _Avoid_: song, video, file
 
+**Download manifest**:
+The Muzik-owned record of already-fetched video ids — one id per line, in `.muzik-manifest.txt` beside the Tracks — so a re-run Source never re-downloads a Track it already produced (ADR-0009). Deleting a line is how one Track is deliberately re-fetched. yt-dlp's old `<extractor> <id>` archive file is frozen: read for its pre-manifest ids, never written again.
+_Avoid_: archive (the retired yt-dlp file), history, cache
+
 ### Identification
 
 **Identification**:

@@ -120,7 +120,7 @@ class YtDlpDownloader:
         #: by Muzik itself after each successful fetch. Owning the format (rather
         #: than piggy-backing yt-dlp's extractor-keyed archive) is what keeps re-run
         #: detection independent of yt-dlp internals — the coupling behind #28/#29.
-        self._manifest_path = self._out_dir / ".muzik-archive.txt"
+        self._manifest_path = self._out_dir / ".muzik-manifest.txt"
         #: yt-dlp's old ``<extractor> <id>`` archive, read-only for back-compat
         #: (#49): pre-manifest fetches are recorded here. Muzik no longer lets
         #: yt-dlp write it, so its format is frozen — it only contributes ids.
@@ -291,10 +291,16 @@ class YtDlpDownloader:
             return []
 
         tracks = self._tracks_from_info(info, source.url)
-        if not tracks and self._all_archived(source.url):
-            # Every entry was already in the archive (a re-run, #8), not an empty or
-            # unplayable Source (#24). Record it so the CLI can say so rather than
-            # emitting a silent, bare 0/0 summary.
+        if not tracks and self._filter_skipped:
+            # Nothing was pulled and the filter skipped at least one entry: a
+            # re-run with nothing new (#8), not an empty or unplayable Source
+            # (#24). Record it so the CLI can say so rather than emitting a
+            # silent, bare 0/0 summary. The filter's own skips are the evidence —
+            # no second, archive-free resolve of the Source (#49): the old
+            # resolve-and-compare depended on the same extraction internals
+            # (lazy ``process=False`` generators, flat entries) this ticket
+            # exists to stop leaning on, and cost a network round-trip per
+            # empty result.
             self.archive_skips.append(source.url)
         return tracks
 
@@ -315,54 +321,6 @@ class YtDlpDownloader:
             for entry in entries
             if entry and entry.get("id") not in self._filter_skipped
         ]
-
-    def _all_archived(self, url: str) -> bool:
-        """True when the Source resolves to video ids that are ALL already in the
-        download archive — a re-run with nothing new, as opposed to an empty Source.
-
-        Only reached when a download pulled nothing. Resolve the Source's ids first,
-        then match them against the archive the batch maintains. An empty Source
-        resolves to no ids; an unplayable-but-*new* Source to ids that are not in the
-        archive — so only a genuine re-run reports here.
-
-        Matching is by **video id**, not yt-dlp's own ``in_download_archive``: a URL
-        that carries a ``list=`` classifies the entry under the ``YoutubeTab``
-        extractor, while the download recorded it under ``Youtube`` — so the two
-        archive keys disagree and the API check misses. The video id is the same
-        either way, and it is what "already fetched" really means.
-        """
-        ids = self._resolve_entry_ids(url)
-        if not ids:
-            return False
-        archived = self._archived_ids()
-        return all(video_id in archived for video_id in ids)
-
-    def _resolve_entry_ids(self, url: str) -> list[str]:
-        """The Source's video ids, resolved *archive-free* so an already-fetched
-        entry still appears (a ``download_archive`` in the opts makes yt-dlp filter
-        it out during extraction, returning ``None``). Flat, so a playlist isn't
-        re-extracted in full. Empty on a Source that no longer resolves."""
-        opts: dict = {
-            "quiet": True,
-            "extract_flat": "in_playlist",
-            "noplaylist": not self._expand_playlist,
-        }
-        if self._cookies is not None:
-            opts["cookiefile"] = str(self._cookies)
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False, process=False)
-                if not info:
-                    return []
-                # With process=False, info["entries"] is a LAZY generator: the real
-                # page-by-page extraction runs as it is iterated, so materialise the
-                # ids *inside* the try. A DownloadError mid-pagination (a transient
-                # network/HTTP error, a page that 403s) then degrades to "not a re-run"
-                # here, rather than escaping to abort the batch (#32 / ADR-0002).
-                entries = info["entries"] if "entries" in info else [info]
-                return [entry["id"] for entry in entries if entry and entry.get("id")]
-        except DownloadError:
-            return []  # the Source no longer resolves — treat as empty, not a re-run
 
     def _archived_ids(self) -> set[str]:
         """The video ids already fetched: the Muzik manifest (one id per line, #49)

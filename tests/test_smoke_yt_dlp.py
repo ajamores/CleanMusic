@@ -140,7 +140,7 @@ def test_smoke_archived_rerun_records_nothing_new(out_dir):
     assert rerun.skipped == []  # nothing-new is not a failure
     # The fetch was recorded in the Muzik-owned manifest (#49) — id per line,
     # no extractor key — which is what the re-run just matched against.
-    manifest = (out_dir / ".muzik-archive.txt").read_text(encoding="utf-8")
+    manifest = (out_dir / ".muzik-manifest.txt").read_text(encoding="utf-8")
     assert _VIDEO_ID in manifest.splitlines()
 
 

@@ -63,7 +63,7 @@ def test_a_manifest_archived_id_is_skipped_by_the_wired_filter(tmp_path):
     # Re-running a Source must not re-download already-fetched Tracks (#8). The
     # skip is decided by a Muzik-owned manifest (id per line, #49) consulted via a
     # wired match_filter — returning a reason string tells yt-dlp to skip.
-    (tmp_path / ".muzik-archive.txt").write_text("X\n", encoding="utf-8")
+    (tmp_path / ".muzik-manifest.txt").write_text("X\n", encoding="utf-8")
     opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
     assert opts["match_filter"]({"id": "X"}, incomplete=False)  # a skip reason
     assert opts["match_filter"]({"id": "NEW"}, incomplete=False) is None  # downloads
@@ -95,7 +95,7 @@ def test_a_successful_fetch_is_recorded_in_the_muzik_manifest(tmp_path):
     hook(str(tmp_path / "abc123.m4a"))
     hook(str(tmp_path / "abc123.m4a"))  # a re-record must not duplicate the line
 
-    manifest = (tmp_path / ".muzik-archive.txt").read_text(encoding="utf-8")
+    manifest = (tmp_path / ".muzik-manifest.txt").read_text(encoding="utf-8")
     assert manifest == "abc123\n"
     assert opts["match_filter"]({"id": "abc123"}, incomplete=False)  # now skipped
 
@@ -295,7 +295,9 @@ def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch
     _write_archive(tmp_path, "a", "b")
     fake = _ScriptedYoutubeDL(
         preflight={"_type": "playlist", "entries": [{"id": "a"}, {"id": "b"}]},
-        download_info={"entries": [None, None]},  # both archived → falsy
+        # Both entries come back in full; the filter's recorded skips are what
+        # drop them (#49) — no archive-free re-resolve of the Source.
+        download_info={"entries": [{"id": "a"}, {"id": "b"}]},
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -309,7 +311,7 @@ def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch
 def test_a_manifest_recorded_rerun_is_an_archive_skip(tmp_path, monkeypatch):
     # The same re-run report, keyed by the Muzik manifest alone (#49) — no legacy
     # yt-dlp archive on disk at all.
-    (tmp_path / ".muzik-archive.txt").write_text("X\n", encoding="utf-8")
+    (tmp_path / ".muzik-manifest.txt").write_text("X\n", encoding="utf-8")
     fake = _ScriptedYoutubeDL(
         preflight={"id": "X", "extractor_key": "Youtube"},
         download_info={"id": "X", "title": "Song X"},  # returned despite the skip
@@ -330,10 +332,10 @@ def test_manifest_and_legacy_archive_ids_are_unioned(tmp_path, monkeypatch):
     # still a fully-archived re-run. The legacy file is read-only back-compat —
     # frozen, never written again.
     _write_archive(tmp_path, "old")  # pre-#49 fetch, recorded by yt-dlp
-    (tmp_path / ".muzik-archive.txt").write_text("new\n", encoding="utf-8")
+    (tmp_path / ".muzik-manifest.txt").write_text("new\n", encoding="utf-8")
     fake = _ScriptedYoutubeDL(
         preflight={"_type": "playlist", "entries": [{"id": "old"}, {"id": "new"}]},
-        download_info={"entries": [None, None]},
+        download_info={"entries": [{"id": "old"}, {"id": "new"}]},
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -362,8 +364,9 @@ def test_a_resolvable_but_unarchived_empty_source_is_not_an_archive_skip(tmp_pat
 
 
 def test_an_unresolvable_empty_source_is_not_an_archive_skip(tmp_path, monkeypatch):
-    # A Source that resolves to nothing at all is empty, not a re-run — no skip.
-    _write_archive(tmp_path, "something-else")  # archive non-empty, but nothing resolves
+    # A Source that yields nothing at all is empty, not a re-run — the filter
+    # skipped nothing, so no skip is reported however non-empty the manifest is.
+    _write_archive(tmp_path, "something-else")  # archived ids, but none of *these*
     fake = _ScriptedYoutubeDL(preflight=None, download_info=None)
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -372,55 +375,6 @@ def test_an_unresolvable_empty_source_is_not_an_archive_skip(tmp_path, monkeypat
 
     assert tracks == []
     assert downloader.archive_skips == []
-    assert downloader.skipped == []
-
-
-def _raising_flat_entries():
-    """A lazy resolve generator (the process=False shape) that raises partway —
-    a transient network/HTTP error mid-pagination (#32)."""
-    yield {"id": "a"}
-    raise DownloadError("ERROR: Unable to download webpage (HTTP Error 403)")
-
-
-class _MidResolveRaisingYoutubeDL:
-    """The archive-free resolve returns a *lazy* entries generator that raises
-    ``DownloadError`` as it is iterated — exactly what ``process=False`` does (#32).
-
-    The download pulls nothing (a fully-archived re-run), so ``_all_archived`` runs
-    and calls ``_resolve_entry_ids``; its generator blows up while being materialised,
-    *outside* the download's own ``except DownloadError``.
-    """
-
-    def __call__(self, opts: dict) -> "_MidResolveRaisingYoutubeDL":
-        return self
-
-    def __enter__(self) -> "_MidResolveRaisingYoutubeDL":
-        return self
-
-    def __exit__(self, *exc) -> bool:
-        return False
-
-    def extract_info(self, url: str, download: bool = True, process: bool = True):
-        if download:
-            return None  # fully archived → yt-dlp pulled nothing
-        return {"_type": "playlist", "entries": _raising_flat_entries()}
-
-
-def test_a_mid_resolve_download_error_degrades_not_aborts(tmp_path, monkeypatch):
-    # The archive-free resolve returns a lazy generator (process=False); a transient
-    # error while paginating it raises DownloadError *outside* the download's own
-    # catch. It must degrade to "can't confirm a re-run" — empty result, no crash —
-    # never abort the batch (#32 / ADR-0002).
-    _write_archive(tmp_path, "a")
-    monkeypatch.setattr(
-        "muzik.real.downloader.yt_dlp.YoutubeDL", _MidResolveRaisingYoutubeDL()
-    )
-
-    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
-    tracks = downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
-
-    assert tracks == []
-    assert downloader.archive_skips == []  # couldn't confirm a re-run → not a skip
     assert downloader.skipped == []
 
 

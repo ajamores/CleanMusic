@@ -1,6 +1,6 @@
 # Muzik owns the download manifest; yt-dlp's archive is retired to read-only
 
-**Status: Accepted (2026-08-26).** Re-run detection — "this Track was already fetched, skip it" (#8/#24) — is decided by a Muzik-owned manifest (`.muzik-archive.txt`, one video id per line), not by yt-dlp's `download_archive`. yt-dlp's old `.download-archive.txt` is kept as a frozen, read-only source of pre-existing ids. Decided in #49.
+**Status: Accepted (2026-08-26).** Re-run detection — "this Track was already fetched, skip it" (#8/#24) — is decided by a Muzik-owned manifest (`.muzik-manifest.txt`, one video id per line), not by yt-dlp's `download_archive`. yt-dlp's old `.download-archive.txt` is kept as a frozen, read-only source of pre-existing ids. Decided in #49.
 
 ## The problem
 
@@ -21,9 +21,10 @@ Option 2 was chosen: the whole bug category came from interpreting someone else'
 
 ## The decision
 
-- **The manifest is Muzik's**: `.muzik-archive.txt` beside the Tracks, one video id per line. Nothing else is encoded — no extractor, no URL shape.
+- **The manifest is Muzik's**: `.muzik-manifest.txt` beside the Tracks, one video id per line. Nothing else is encoded — no extractor, no URL shape.
 - **Skipping goes through `match_filter`**: Muzik tells yt-dlp what to skip (id in manifest → skip reason), instead of yt-dlp consulting its own file. The filter takes the `incomplete` form, so flat playlist entries are skipped before their pages are re-extracted — the cost profile `download_archive` had, kept (pipeline speed is a stated concern).
 - **Recording goes through `post_hooks`**: after all postprocessing — the point yt-dlp's own archive recorded at — the landed file's stem (the id, per the `%(id)s.%(ext)s` outtmpl) is appended to the manifest. Manifest bookkeeping never raises: a failed append degrades to a re-fetch next run, never an aborted batch (ADR-0002 / #32).
+- **The re-run report comes from the filter's own skips.** When a download pulls nothing and the filter skipped at least one entry, the Source is reported as "already downloaded" (`archive_skips`, #24). The old shape — a second, archive-free flat resolve of the Source compared against the archive — is deleted: it leaned on the same extraction internals (lazy `process=False` generators, flat-entry keying) this decision exists to stop trusting, and cost a network round-trip per empty result.
 - **The legacy archive is frozen, not migrated.** `.download-archive.txt` is still read (last field of each line, unioned in) so pre-#49 fetches stay recognised — but with `download_archive` gone from the opts, yt-dlp never writes it again, so its format can no longer drift. No migration step, nothing to run once, fully backwards compatible.
 
 ## A live-verified subtlety
@@ -33,6 +34,7 @@ Confirmed by smoke test, not assumed (LEARNINGS: the fake encodes your assumptio
 ## Consequences
 
 - Re-run detection now depends on one Muzik-owned file whose format cannot change without a Muzik commit. The #28 trap is structurally gone (`download_archive` is no longer in the opts at all, so extraction-time filtering cannot recur); the #29 trap has nothing to key on (no extractor in the manifest).
+- `_all_archived` / `_resolve_entry_ids` — the hazard area #49 named — are gone entirely, and with them the last archive-related use of `extract_info`. Re-run reporting is now a local set-membership check, so an all-archived re-run costs no extra network.
 - The yt-dlp surface Muzik relies on narrows to two documented, stable hooks (`match_filter`, `post_hooks`) — both covered live by `tests/test_smoke_yt_dlp.py` (fresh fetch, `list=`-decorated re-run, playlist re-run via flat entries, legacy-archive re-run).
 - A library downloaded before #49 needs nothing done to it: the frozen legacy read keeps its ids honoured forever.
 - The manifest is append-only and human-readable; deleting a line is the supported way to force a re-fetch of one Track.
