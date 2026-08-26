@@ -504,6 +504,46 @@ def test_playlist_mode_expands_a_bare_playlist_without_refusing(tmp_path, monkey
     assert [t.audio_path.stem for t in tracks] == ["a", "b"]
 
 
+# --- a dead playlist entry must not abort the run (ticket #71) ------------------
+#
+# Confirmed live (2026-08-26, probe over the #66 playlist's dead entry at
+# position 353): without ignoreerrors the yt-dlp API raises DownloadError at a
+# dead entry mid-playlist — which the whole-Source catch turns into an aborted
+# batch with every already-downloaded Track manifest-recorded but untagged. With
+# ignoreerrors=True the dead entry comes back as a None entry, neighbours intact.
+
+
+def test_playlist_mode_ignores_per_entry_errors(tmp_path):
+    opts = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)._build_opts()
+    assert opts["ignoreerrors"] is True
+
+
+def test_single_mode_keeps_the_raise_and_classify_path(tmp_path):
+    # Single mode relies on DownloadError raising to classify the failure (the
+    # friendly age-restriction message); it must not swallow errors.
+    assert "ignoreerrors" not in YtDlpDownloader(out_dir=tmp_path)._build_opts()
+
+
+def test_a_dead_playlist_entry_is_skipped_with_its_position(tmp_path, monkeypatch):
+    # Entry 2 of 3 is dead (None): the run keeps the live neighbours and records
+    # the dead one on `skipped` — position and reason — never silently dropped.
+    fake = _ScriptedYoutubeDL(
+        preflight={"_type": "playlist"},
+        download_info={"_type": "playlist", "entries": [
+            {"id": "a", "title": "A"}, None, {"id": "c", "title": "C"},
+        ]},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    tracks = downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert [t.audio_path.stem for t in tracks] == ["a", "c"]
+    [(url, reason)] = downloader.skipped
+    assert url == "https://youtube.com/playlist?list=PL"
+    assert "#2" in reason and "unavailable" in reason
+
+
 # --- --limit caps a playlist expansion at the first N entries (ticket #69) ------
 
 

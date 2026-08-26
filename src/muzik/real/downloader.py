@@ -248,6 +248,15 @@ class YtDlpDownloader:
             # the URL also names a video, so no Muzik-side URL parsing. ``--playlist``
             # flips this to expand the list.
             "noplaylist": not self._expand_playlist,
+            # A dead entry (deleted/terminated/private) mid-playlist must not
+            # abort the batch (#71): without this the API raises at the entry,
+            # and the whole-Source catch would strand every already-downloaded
+            # Track manifest-recorded but untagged. Confirmed live (2026-08-26):
+            # with ignoreerrors the dead entry returns as a None entry, its
+            # neighbours intact — recorded on ``skipped`` in ``_tracks_from_info``.
+            # Single mode keeps the raise, which the catch *classifies* (age wall
+            # vs. generic) into one clean per-Source skip.
+            **({"ignoreerrors": True} if self._expand_playlist else {}),
             # Re-running a Source must not re-download Tracks already fetched (#8).
             # Decided by the Muzik-owned manifest via match_filter (#49), not
             # yt-dlp's extractor-keyed ``download_archive`` (the #28/#29 coupling):
@@ -324,6 +333,16 @@ class YtDlpDownloader:
             entries: list = []
         elif "entries" in info:
             entries = list(info["entries"] or [])
+            # A None entry is one ignoreerrors swallowed — a dead video (#71).
+            # Record it as a skip with its playlist position (all yt-dlp leaves of
+            # it), so it surfaces in the Review output rather than vanishing.
+            for position, entry in enumerate(entries, start=1):
+                if not entry:
+                    self.skipped.append((
+                        url_fallback,
+                        f"playlist entry #{position} unavailable "
+                        "(deleted or private video) — skipped",
+                    ))
         else:
             entries = [info]
         return [
