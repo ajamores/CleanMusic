@@ -59,12 +59,45 @@ def test_mp3_320_is_the_reencoded_fallback(tmp_path):
     assert pp["preferredquality"] == "320"
 
 
-def test_a_download_archive_in_the_out_dir_skips_already_fetched_tracks(tmp_path):
-    # Re-running a Source must not re-download already-fetched Tracks (#8): yt-dlp's
-    # download archive records fetched video ids and skips them next run. It lives
-    # in the out dir so it persists alongside the Tracks it tracks.
+def test_a_manifest_archived_id_is_skipped_by_the_wired_filter(tmp_path):
+    # Re-running a Source must not re-download already-fetched Tracks (#8). The
+    # skip is decided by a Muzik-owned manifest (id per line, #49) consulted via a
+    # wired match_filter — returning a reason string tells yt-dlp to skip.
+    (tmp_path / ".muzik-archive.txt").write_text("X\n", encoding="utf-8")
     opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
-    assert opts["download_archive"] == str(tmp_path / ".download-archive.txt")
+    assert opts["match_filter"]({"id": "X"}, incomplete=False)  # a skip reason
+    assert opts["match_filter"]({"id": "NEW"}, incomplete=False) is None  # downloads
+
+
+def test_yt_dlps_own_download_archive_is_no_longer_used(tmp_path):
+    # The whole point of #49: no yt-dlp download_archive in the opts, so nothing
+    # extractor-keyed is written or consulted (the #28/#29 coupling), and yt-dlp
+    # no longer filters archived entries during *extraction* (#28's trap).
+    assert "download_archive" not in YtDlpDownloader(out_dir=tmp_path)._build_opts()
+
+
+def test_an_incomplete_entry_without_an_id_is_not_skipped(tmp_path):
+    # The filter is consulted on flat (incomplete) playlist entries too; one that
+    # carries no id yet must be let through for the complete pass to decide —
+    # never skipped on missing evidence.
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+    assert opts["match_filter"]({"title": "flat"}, incomplete=True) is None
+
+
+def test_a_successful_fetch_is_recorded_in_the_muzik_manifest(tmp_path):
+    # yt-dlp calls the wired post hook with the final filepath after all
+    # postprocessing — the same point its own archive recorded at. The file stem
+    # is the video id (outtmpl is %(id)s.%(ext)s); it lands in the manifest once,
+    # id per line, and the filter skips it from then on — within this same run.
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+    hook = opts["post_hooks"][0]
+
+    hook(str(tmp_path / "abc123.m4a"))
+    hook(str(tmp_path / "abc123.m4a"))  # a re-record must not duplicate the line
+
+    manifest = (tmp_path / ".muzik-archive.txt").read_text(encoding="utf-8")
+    assert manifest == "abc123\n"
+    assert opts["match_filter"]({"id": "abc123"}, incomplete=False)  # now skipped
 
 
 def test_cookiefile_added_only_when_cookies_given(tmp_path):
@@ -171,14 +204,19 @@ def _write_archive(tmp_path, *video_ids: str) -> None:
 
 
 class _ScriptedYoutubeDL:
-    """Fake yt_dlp.YoutubeDL for the archive-skip path (#24).
+    """Fake yt_dlp.YoutubeDL for the archive-skip path (#24/#49).
 
     ``preflight`` is what any ``extract_info(download=False, …)`` returns — serving
     both the bare-playlist type check and the archive-free resolve in
     ``_all_archived`` (yt-dlp's URL classification: a video, or a playlist of flat
-    entries). ``download_info`` is the ``download=True`` return. Which ids count as
-    already-fetched is set by the on-disk archive (``_write_archive``), matching the
-    real code, which matches by video id read from that file.
+    entries). ``download_info`` is the ``download=True`` return.
+
+    Mirrors real match_filter semantics, confirmed live (the smoke suite): yt-dlp
+    consults the wired filter per entry but a skip only suppresses the *download* —
+    a skipped single video's info dict is still returned in full, and a skipped
+    playlist entry comes back falsy. The old ``download_archive`` returned None for
+    a skipped single video; modelling that here is exactly the
+    fake-encodes-the-assumption trap LEARNINGS warns about.
     """
 
     def __init__(self, preflight=None, download_info=None):
@@ -186,16 +224,27 @@ class _ScriptedYoutubeDL:
         self._download_info = download_info
 
     def __call__(self, opts: dict) -> "_ScriptedYoutubeDL":
+        self._match_filter = opts.get("match_filter")
         return self
+
+    def _consult_filter(self, info) -> None:
+        if self._match_filter is not None and info and info.get("id"):
+            self._match_filter(info, incomplete=False)
+
+    def extract_info(self, url: str, download: bool = True, process: bool = True):
+        if not download:
+            return self._preflight
+        info = self._download_info
+        if isinstance(info, dict):
+            for entry in info.get("entries") or ([info] if "entries" not in info else []):
+                self._consult_filter(entry)
+        return info
 
     def __enter__(self) -> "_ScriptedYoutubeDL":
         return self
 
     def __exit__(self, *exc) -> bool:
         return False
-
-    def extract_info(self, url: str, download: bool = True, process: bool = True):
-        return self._download_info if download else self._preflight
 
 
 def test_an_all_archived_rerun_is_recorded_as_an_archive_skip(tmp_path, monkeypatch):
@@ -205,7 +254,11 @@ def test_an_all_archived_rerun_is_recorded_as_an_archive_skip(tmp_path, monkeypa
     _write_archive(tmp_path, "X")
     fake = _ScriptedYoutubeDL(
         preflight={"id": "X", "extractor_key": "Youtube"},  # a video → no refusal
-        download_info=None,  # yt-dlp downloaded nothing (already archived)
+        # Confirmed live: a match_filter skip suppresses only the download — the
+        # single video's info dict still comes back in full, so the Downloader
+        # itself must drop the skipped entry rather than map a Track for audio
+        # that was never fetched (#49).
+        download_info={"id": "X", "title": "Song X"},
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -224,7 +277,7 @@ def test_archive_skip_matches_by_id_across_a_tab_extractor(tmp_path, monkeypatch
     _write_archive(tmp_path, "aD9KtVc6svw")  # recorded as "youtube aD9KtVc6svw"
     fake = _ScriptedYoutubeDL(
         preflight={"id": "aD9KtVc6svw", "extractor_key": "YoutubeTab", "ie_key": "Youtube"},
-        download_info=None,
+        download_info={"id": "aD9KtVc6svw", "title": "T"},  # returned despite the skip
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
@@ -243,6 +296,44 @@ def test_an_all_archived_playlist_rerun_is_an_archive_skip(tmp_path, monkeypatch
     fake = _ScriptedYoutubeDL(
         preflight={"_type": "playlist", "entries": [{"id": "a"}, {"id": "b"}]},
         download_info={"entries": [None, None]},  # both archived → falsy
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    tracks = downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert tracks == []
+    assert downloader.archive_skips == ["https://youtube.com/playlist?list=PL"]
+
+
+def test_a_manifest_recorded_rerun_is_an_archive_skip(tmp_path, monkeypatch):
+    # The same re-run report, keyed by the Muzik manifest alone (#49) — no legacy
+    # yt-dlp archive on disk at all.
+    (tmp_path / ".muzik-archive.txt").write_text("X\n", encoding="utf-8")
+    fake = _ScriptedYoutubeDL(
+        preflight={"id": "X", "extractor_key": "Youtube"},
+        download_info={"id": "X", "title": "Song X"},  # returned despite the skip
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    tracks = downloader.download(Source(url="https://youtu.be/X"))
+
+    assert tracks == []
+    assert downloader.archive_skips == ["https://youtu.be/X"]
+    assert downloader.skipped == []
+
+
+def test_manifest_and_legacy_archive_ids_are_unioned(tmp_path, monkeypatch):
+    # A library fetched partly before #49 (legacy ``<extractor> <id>`` lines) and
+    # partly after (manifest ids): a playlist whose entries span both files is
+    # still a fully-archived re-run. The legacy file is read-only back-compat —
+    # frozen, never written again.
+    _write_archive(tmp_path, "old")  # pre-#49 fetch, recorded by yt-dlp
+    (tmp_path / ".muzik-archive.txt").write_text("new\n", encoding="utf-8")
+    fake = _ScriptedYoutubeDL(
+        preflight={"_type": "playlist", "entries": [{"id": "old"}, {"id": "new"}]},
+        download_info={"entries": [None, None]},
     )
     monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
 
