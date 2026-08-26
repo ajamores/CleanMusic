@@ -108,6 +108,7 @@ class YtDlpDownloader:
         cookies: Path | None = None,
         output_format: OutputFormat = DEFAULT_FORMAT,
         expand_playlist: bool = False,
+        playlist_limit: int | None = None,
     ):
         self._out_dir = Path(out_dir)
         self._cookies = cookies
@@ -116,6 +117,11 @@ class YtDlpDownloader:
         #: ``list=`` is dropped. ``--playlist`` sets this True for one run to expand
         #: the list; it is never persisted.
         self._expand_playlist = expand_playlist
+        #: Cap a ``--playlist`` expansion at the list's first N entries (#69), so
+        #: the #66 seeding run can be staged (20, 100, 150, all) against one real
+        #: playlist. Positional from the top: a later, larger limit revisits the
+        #: earlier prefix and the download manifest skips it. ``None`` = whole list.
+        self._playlist_limit = playlist_limit
         #: The Muzik-owned download manifest (#49): one video id per line, written
         #: by Muzik itself after each successful fetch. Owning the format (rather
         #: than piggy-backing yt-dlp's extractor-keyed archive) is what keeps re-run
@@ -253,6 +259,10 @@ class YtDlpDownloader:
         }
         if self._cookies is not None:
             opts["cookiefile"] = str(self._cookies)
+        if self._expand_playlist and self._playlist_limit is not None:
+            # Only the playlist's first N entries are even extracted (#69) — the
+            # cheapest cap yt-dlp offers, applied before any per-entry work.
+            opts["playlistend"] = self._playlist_limit
         return opts
 
     def download(self, source: Source) -> list[Track]:

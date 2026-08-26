@@ -114,9 +114,14 @@ def _build_downloader(
     cookies: Path | None,
     fmt: OutputFormat,
     expand_playlist: bool = False,
+    limit: int | None = None,
 ) -> YtDlpDownloader:
     return YtDlpDownloader(
-        out_dir=out_dir, cookies=cookies, output_format=fmt, expand_playlist=expand_playlist
+        out_dir=out_dir,
+        cookies=cookies,
+        output_format=fmt,
+        expand_playlist=expand_playlist,
+        playlist_limit=limit,
     )
 
 
@@ -288,6 +293,14 @@ def main() -> int:
         help="Expand a playlist link (default: take just the Track, ignoring an attached list)",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="With --playlist: consider only the playlist's first N entries "
+        "(default: all). Staged runs with a growing limit walk the same list; "
+        "already-fetched Tracks are skipped by the download manifest.",
+    )
+    parser.add_argument(
         "--format",
         choices=sorted(_FORMAT_CHOICES),
         default=None,
@@ -295,8 +308,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.limit is not None:
+        # A limit caps how many playlist entries the run considers; refuse the
+        # meaningless combinations rather than silently ignoring them (#69).
+        if not args.playlist:
+            parser.error("--limit needs --playlist (it caps the playlist entries a run considers)")
+        if args.limit < 1:
+            parser.error("--limit must be at least 1")
+
     fmt = _resolve_format(args.format)
-    downloader = _build_downloader(args.out, args.cookies, fmt, expand_playlist=args.playlist)
+    downloader = _build_downloader(
+        args.out, args.cookies, fmt, expand_playlist=args.playlist, limit=args.limit
+    )
     providers = _build_providers(downloader, fmt, args.out)
 
     if args.review:

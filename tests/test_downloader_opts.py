@@ -504,6 +504,24 @@ def test_playlist_mode_expands_a_bare_playlist_without_refusing(tmp_path, monkey
     assert [t.audio_path.stem for t in tracks] == ["a", "b"]
 
 
+# --- --limit caps a playlist expansion at the first N entries (ticket #69) ------
+
+
+def test_a_playlist_limit_caps_extraction_at_the_first_n_entries(tmp_path):
+    # Staged seeding runs (#66) walk the same playlist with a growing limit; the
+    # cap is positional (yt-dlp's playlistend), so run N+1 revisits run N's prefix
+    # and the download manifest skips it.
+    opts = YtDlpDownloader(
+        out_dir=tmp_path, expand_playlist=True, playlist_limit=20
+    )._build_opts()
+    assert opts["playlistend"] == 20
+
+
+def test_no_limit_leaves_extraction_uncapped(tmp_path):
+    opts = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)._build_opts()
+    assert "playlistend" not in opts
+
+
 # --- playlist title + duration for the .m3u8 (ticket #25) -----------------------
 
 
