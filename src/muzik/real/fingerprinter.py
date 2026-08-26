@@ -11,13 +11,17 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import tempfile
+import threading
+import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 from shazamio import Serialize, Shazam
 from shazamio.schemas.models import SongSection, TrackInfo
 
 from muzik.domain import Match, Track
+from muzik.providers import Fingerprinter
 
 
 def _to_wav(src: Path, dst: Path) -> None:
@@ -94,6 +98,16 @@ def _fetch(url: str | None) -> bytes | None:
 
 
 class ShazamFingerprinter:
+    """Identify a Track via Shazam. A miss returns ``None``; a *failure* raises.
+
+    The two are deliberately distinct (#63): a genuine miss (Shazam heard nothing
+    it knows) is an answer, but a network error or rate-limit is not — swallowing
+    it here would make a limited Shazam indistinguishable from a miss and flood
+    the Review queue. ``RateLimitedFingerprinter`` (which real runs wrap this in,
+    ``cli.py``) owns the retry and the final degrade-to-miss; the engine's
+    per-Track guard (#62) is the backstop, so the batch still never blocks.
+    """
+
     def identify(self, track: Track) -> Match | None:
         return asyncio.run(self._identify(track))
 
@@ -101,8 +115,72 @@ class ShazamFingerprinter:
         with tempfile.TemporaryDirectory() as d:
             wav = Path(d) / "clip.wav"
             await asyncio.to_thread(_to_wav, track.audio_path, wav)
-            try:
-                out = await Shazam().recognize(str(wav))
-            except Exception:
-                return None
+            out = await Shazam().recognize(str(wav))
         return _to_match(out)
+
+
+class RateLimitedFingerprinter:
+    """Wraps a Fingerprinter so a batch can't fire rapid identify calls, and a
+    transient failure is retried instead of flooding the Review queue (#63).
+
+    A ~400-Track batch from 4 workers is exactly the burst pattern that draws a
+    rate-limit or temp-ban from Shazam. Calls are spaced by ``min_interval`` at
+    their *starts* — unlike ``RateLimitedAuthority``, the lock is not held across
+    the call, so identifications still overlap and the pipeline's speed-sensitive
+    throughput is capped by the request rate, not serialised.
+
+    A failure (the inner fingerprinter raising — network error, rate-limit) is
+    retried up to ``attempts`` times total, sleeping ``backoff`` doubling between
+    tries, each retry re-claiming a throttle slot. Exhausted, it degrades to
+    ``None`` — the miss path the engine already handles (best-effort Tags +
+    Review) — so the batch never blocks (ADR-0002), but says so on stdout first:
+    a rate-limited batch must not read as a run of ordinary misses (the silent
+    flood #63 exists to stop). A genuine miss (``None`` from the inner) is an
+    answer and is never retried.
+    """
+
+    def __init__(
+        self,
+        inner: Fingerprinter,
+        min_interval: float = 1.0,
+        *,
+        attempts: int = 3,
+        backoff: float = 2.0,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.inner = inner
+        self._min_interval = min_interval
+        self._attempts = attempts
+        self._backoff = backoff
+        self._sleep = sleep
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def identify(self, track: Track) -> Match | None:
+        for attempt in range(self._attempts):
+            self._await_slot()
+            try:
+                return self.inner.identify(track)
+            except Exception as exc:
+                if attempt + 1 == self._attempts:
+                    # Degrade to a miss, never block the batch — but not silently:
+                    # the Track's Review entry will read "no fingerprint match",
+                    # so this line is the only trace that it was a failure.
+                    print(
+                        f"note: fingerprinting failed {self._attempts}x for "
+                        f"{track.source_url} ({type(exc).__name__}: {exc}) — treating as a miss"
+                    )
+                    return None
+                self._sleep(self._backoff * (2**attempt))
+        return None  # unreachable (attempts >= 1); keeps the contract explicit
+
+    def _await_slot(self) -> None:
+        # The lock covers only the slot claim, so waiting threads queue for spaced
+        # start times while the calls themselves run concurrently.
+        with self._lock:
+            wait = self._next_allowed - self._clock()
+            if wait > 0:
+                self._sleep(wait)
+            self._next_allowed = self._clock() + self._min_interval
