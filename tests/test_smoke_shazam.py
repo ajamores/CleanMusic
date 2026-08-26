@@ -27,7 +27,14 @@ exists to check, so the runner brings it.
 
 Assertions are on **shape** — a ``Match`` (or a clean ``None``) with string fields —
 never on the identity a live fingerprint returns, so a re-fingerprint upstream can't
-flake the run.
+flake the run. Since #58 the adapter parses the response through shazamio's
+``Serialize``, so on a Match this also asserts the payload-borne fields (album,
+ISRC) still *populate*: a mainstream catalogue Match carries both in the recognize
+payload itself, so an empty one here means the serializer wiring dropped data the
+raw response had. Point ``MUZIK_SMOKE_AUDIO`` at an *album* track accordingly — a
+release with no Album row would trip that assertion. Cover art stays shape-only:
+it rides a second CDN fetch that deliberately degrades to ``None`` on a network
+blip, and a skip-worthy condition must not fail the run.
 """
 
 from __future__ import annotations
@@ -83,4 +90,13 @@ def test_smoke_real_fingerprint_returns_a_match_or_clean_none():
         # ShazamFingerprinter hard-codes confidence=1.0 — Shazam gives a binary
         # match, not a graded score (docs/LEARNINGS.md).
         and match.confidence == 1.0
+        # The #58 serializer swap must not drop payload-borne fields the raw
+        # response carries (see module docstring). Still shape, not identity —
+        # WHICH album/ISRC comes back is never asserted.
+        and match.album != ""
+        and isinstance(match.isrc, str)
+        and match.isrc != ""
+        # Cover art rides a separate CDN fetch that degrades to None on any
+        # network blip — a skip-worthy condition must not fail the run.
+        and (match.cover_art is None or isinstance(match.cover_art, bytes))
     )
