@@ -154,6 +154,8 @@ def run(
     """
     tracks = providers.downloader.download(source)
     results = _process_tracks(tracks, providers, concurrency)
+    # ``_process_tracks`` guards each Track (#62), so from here every Track has a
+    # result — a crash on one becomes its own reviewable failure, never an abort.
     # Enqueue on this thread, not the workers: it keeps the Review queue a single
     # writer (its append needs no lock) and the queue order deterministic —
     # reviewable Tracks in playlist order, then the Downloader's own skips.
@@ -200,13 +202,37 @@ def _process_tracks(
 
     ``ThreadPoolExecutor.map`` yields results in submission order, so the returned
     list lines up with ``tracks`` regardless of which finished first. An empty
-    playlist needs no pool.
+    playlist needs no pool. Each Track is guarded (#62): an exception from any
+    stage becomes that Track's own failed result rather than propagating — with
+    the Review queue and ``.m3u8`` written only after processing, one corrupt
+    file must not discard a whole batch's identification work.
     """
     if not tracks:
         return []
     workers = max(1, min(concurrency, len(tracks)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(lambda track: _process_track(track, providers), tracks))
+        return list(pool.map(lambda track: _process_track_guarded(track, providers), tracks))
+
+
+def _process_track_guarded(track: Track, providers: Providers) -> TrackResult:
+    """``_process_track``, with any escaping exception captured as a failed result.
+
+    The failure keeps the Track's identity and names the exception, and ``run``
+    routes it to the Review queue like any other reviewable result — surfaced to
+    the user at the end of the batch, never silently dropped. Nothing is claimed
+    written (``tags``/``output_path`` are None): a crash may have struck at any
+    stage, including mid-write.
+    """
+    try:
+        return _process_track(track, providers)
+    except Exception as exc:
+        return TrackResult(
+            source_url=track.source_url,
+            tags=None,
+            output_path=None,
+            status="review",
+            reason=f"failed: {type(exc).__name__}: {exc}",
+        )
 
 
 def _process_track(track: Track, providers: Providers) -> TrackResult:
