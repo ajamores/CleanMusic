@@ -82,3 +82,56 @@ def test_a_refused_bare_playlist_is_reported_and_runs_no_pipeline(tmp_path, monk
     assert exit_code != 0
     assert "--playlist" in out
     assert "verified" not in out  # no batch summary — nothing was attempted
+
+
+# --- --limit caps a --playlist run (ticket #69) ---------------------------------
+
+
+def test_build_downloader_passes_the_limit_through(tmp_path):
+    downloader = _build_downloader(
+        tmp_path, None, OutputFormat.M4A, expand_playlist=True, limit=20
+    )
+    assert downloader._build_opts()["playlistend"] == 20
+
+
+def test_limit_reaches_the_run_from_the_command_line(tmp_path, monkeypatch):
+    captured = {}
+
+    def _run(source, providers, **kwargs):
+        captured["opts"] = providers.downloader._build_opts()
+        return []
+
+    monkeypatch.setattr("muzik.cli.run", _run)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["muzik", "https://youtube.com/playlist?list=PL", "--playlist",
+         "--limit", "20", "--out", str(tmp_path / "out")],
+    )
+
+    assert main() == 0
+    assert captured["opts"]["playlistend"] == 20
+
+
+def test_limit_without_playlist_is_refused(tmp_path, monkeypatch, capsys):
+    # A limit caps how many playlist entries the run considers; without --playlist
+    # there is no list to cap — refuse rather than silently ignore.
+    monkeypatch.setattr(
+        "sys.argv",
+        ["muzik", "https://youtu.be/abc", "--limit", "20", "--out", str(tmp_path / "out")],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+    assert excinfo.value.code == 2
+    assert "--playlist" in capsys.readouterr().err
+
+
+def test_a_non_positive_limit_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["muzik", "https://youtube.com/playlist?list=PL", "--playlist",
+         "--limit", "0", "--out", str(tmp_path / "out")],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+    assert excinfo.value.code == 2
+    assert "at least 1" in capsys.readouterr().err
