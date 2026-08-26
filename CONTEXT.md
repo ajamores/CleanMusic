@@ -47,7 +47,7 @@ The metadata written into a Track's file — title, artist, album, track number,
 _Avoid_: metadata, ID3
 
 **Artist normalisation**:
-A conservative canonicalisation of the artist name applied just before it is written (verified and provisional Tags alike), so a library doesn't accumulate variants of one artist. v1 unifies feature-credit form (`ft.` / `featuring` / `(feat. …)` → one `feat.`), de-duplicates repeated credits, NFC-normalises Unicode, and collapses whitespace — but never folds case, strips diacritics, or romanises, because those can merge two distinct artists without a catalog (ADR-0007). The rule: an untidy-but-correct name beats a wrong merge.
+A conservative canonicalisation of the artist name applied just before it is written (verified and provisional Tags alike), so a library doesn't accumulate variants of one artist. v1 unifies feature-credit form (`ft.` / `featuring` / `(feat. …)` → one `feat.`), de-duplicates repeated credits, NFC-normalises Unicode, and collapses whitespace — but never folds case, strips diacritics, or romanises, because those can merge two distinct artists without a catalog (ADR-0007). It also keeps the credit in the right *field*: a clear featured-artist clause is moved out of the artist field into the title as `(feat. X)`, leaving the artist **primary-only** — the convention every reference tagger uses — but only when that move is unambiguous (never duplicating a credit the title already carries, never guessing across a disagreement). The rule: an untidy-but-correct name beats a wrong merge, and an untidy pair beats a wrong cross-field move.
 _Avoid_: cleanup, dedupe (as the whole thing), fuzzy-match
 
 **Review queue**:

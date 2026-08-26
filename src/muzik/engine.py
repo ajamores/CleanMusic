@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from muzik.artist import normalise_artist
+from muzik.artist import place_feature_credit
 from muzik.domain import (
     IdentityVerdict,
     Match,
@@ -766,16 +766,19 @@ def _source_only_tags(track: Track) -> Tags | None:
 
 
 def _write(track: Track, tags: Tags, providers: Providers) -> tuple[Tags, Path]:
-    """Canonicalise the artist Tag, write, and return the written Tags with its path.
+    """Canonicalise the artist/title Tags, write, and return them with their path.
 
     The single choke point every write funnels through — the batch's matched and
-    best-effort paths and the review-clear paths alike — so normalising the artist
-    here (#47) covers verified and provisional Tags in one place, with no path able
-    to skip it. The possibly-rewritten Tags are returned so each caller reports what
-    was actually written: the file, the Review queue entry, and a ``--playlist``
-    run's ``.m3u8`` all carry the same canonical artist.
+    best-effort paths and the review-clear paths alike — so canonicalising here
+    covers verified and provisional Tags in one place, with no path able to skip it.
+    ``place_feature_credit`` both applies #47's in-place artist tidy *and* moves a
+    featured-artist clause out of the artist field into the title (#56), so the
+    artist stays primary-only. The possibly-rewritten Tags are returned so each
+    caller reports what was actually written: the file, the Review queue entry, and a
+    ``--playlist`` run's ``.m3u8`` all carry the same canonical title and artist.
     """
-    tags = replace(tags, artist=normalise_artist(tags.artist))
+    title, artist = place_feature_credit(tags.title, tags.artist)
+    tags = replace(tags, title=title, artist=artist)
     return tags, providers.tagwriter.write(track, tags)
 
 
