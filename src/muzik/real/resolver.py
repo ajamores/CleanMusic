@@ -99,7 +99,13 @@ class HaikuResolver:
 
     def _witness(self, track: Track, match: Match, second: Match | None) -> IdentityRuling:
         content: list[dict] = [{"type": "text", "text": _witness_prompt(track, match, second)}]
-        image = _fetch_image(track.thumbnail_url)
+        # On an auto-generated upload the thumbnail is the ALBUM COVER — its
+        # printed title anchors the model to the album's name over every textual
+        # instruction (#73, reproduced live: prompt guidance alone lost to the
+        # image 3/3). The cover adds no identity signal there (the description
+        # already names song and album, machine-authored), so it is withheld;
+        # organic uploads keep the image, where it catches impersonators (ADR-0006).
+        image = None if _is_auto_generated(track.description) else _fetch_image(track.thumbnail_url)
         if image is not None:
             data, media_type = image
             content.insert(
@@ -129,6 +135,19 @@ class HaikuResolver:
                 "they disagree, judge which (if either) the video's evidence "
                 "supports; if neither clearly fits, or you cannot tell, answer "
                 "'inconsistent' or 'unsure' so a human reviews it. "
+                "Know YouTube's auto-generated upload format (#73): a description "
+                "beginning 'Provided to YouTube by <label>' then lists "
+                "'<Song> · <Artist>' on one line, the ALBUM name alone on the "
+                "next, and '℗ <year> <label>' after. That standalone line is the "
+                "album the song appears on — NOT the song being played — and album "
+                "titles often coincide with a different well-known song (title "
+                "tracks especially). On such uploads the thumbnail is the ALBUM "
+                "COVER: any title printed on the artwork is the album's name, not "
+                "the song's. An album name appearing in the description, tags, or "
+                "cover art is corroborating context for the identification, never "
+                "a competing claim about which song this is; the song's own "
+                "identity lives in the video title and the '<Song> · <Artist>' "
+                "line. "
                 'Reply with ONLY JSON {"verdict": "consistent"|"inconsistent"|'
                 '"unsure", "rationale": str}. Use "unsure" when the evidence is too '
                 "thin to tell. Keep the rationale to one short sentence."
@@ -136,6 +155,11 @@ class HaikuResolver:
             messages=[{"role": "user", "content": content}],
         )
         return _parse_ruling(_first_text(resp))
+
+
+def _is_auto_generated(description: str) -> bool:
+    """True for YouTube's auto-generated (label-provided) uploads (#73)."""
+    return description.lstrip().startswith("Provided to YouTube by")
 
 
 def _witness_prompt(track: Track, match: Match, second: Match | None = None) -> str:
