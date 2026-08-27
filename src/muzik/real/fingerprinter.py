@@ -108,6 +108,16 @@ class ShazamFingerprinter:
     per-Track guard (#62) is the backstop, so the batch still never blocks.
     """
 
+    #: Ceiling on one recognize round-trip. A healthy call answers in a few
+    #: seconds; a rate-limiting Shazam *tarpits* — accepts the connection and
+    #: never replies (observed live, #79: all four workers wedged indefinitely,
+    #: shazamio itself imposing no timeout). The bound turns that into a raise
+    #: the RateLimitedFingerprinter retries and then notes as a miss.
+    _RECOGNIZE_TIMEOUT_S = 30.0
+
+    def __init__(self, recognize_timeout: float = _RECOGNIZE_TIMEOUT_S) -> None:
+        self._recognize_timeout = recognize_timeout
+
     def identify(self, track: Track) -> Match | None:
         return asyncio.run(self._identify(track))
 
@@ -115,7 +125,9 @@ class ShazamFingerprinter:
         with tempfile.TemporaryDirectory() as d:
             wav = Path(d) / "clip.wav"
             await asyncio.to_thread(_to_wav, track.audio_path, wav)
-            out = await Shazam().recognize(str(wav))
+            out = await asyncio.wait_for(
+                Shazam().recognize(str(wav)), timeout=self._recognize_timeout
+            )
         return _to_match(out)
 
 
