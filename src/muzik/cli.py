@@ -187,6 +187,10 @@ def _conflict_lines(conflict: MatchConflict | None, indent: str = "  ") -> list[
     if witnesses:
         lines.append(f"{indent}video/channel says: {witnesses}")
     lines.append(f"{indent}→ {conflict.why}")
+    if conflict.witness_rationale:
+        # The witness's own sentence (#74) — the reasoning behind the ruling the
+        # ``why`` line names, so a false rejection explains itself at review time.
+        lines.append(f'{indent}witness: "{conflict.witness_rationale}"')
     return lines
 
 

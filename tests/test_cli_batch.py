@@ -102,3 +102,26 @@ def test_a_bare_reason_prints_without_a_conflict_block(monkeypatch, capsys, tmp_
     assert "review  https://youtu.be/nomatch" in out
     assert "no fingerprint match" in out
     assert "fingerprint:" not in out  # no structured conflict block
+
+
+def test_conflict_lines_quote_the_witness_rationale_when_present():
+    # #74: the witness's own sentence — the explanation the #66 slice run lacked.
+    conflict = MatchConflict(
+        heard=Match(title="Have You Seen Her", artist="Donell Jones", album="", confidence=1.0),
+        source_artist="",
+        uploader="Donell Jones",
+        why="the identity witness ruled the Match inconsistent with the video, kept provisional",
+        witness_rationale="the cover names the album, not the song",
+    )
+    joined = "\n".join(cli._conflict_lines(conflict))
+    assert 'witness: "the cover names the album, not the song"' in joined
+
+
+def test_conflict_lines_omit_the_witness_line_without_a_rationale():
+    conflict = MatchConflict(
+        heard=Match(title="Drift Away", artist="Dobie Gray", album="", confidence=0.62),
+        source_artist="Ab-Soul",
+        uploader="",
+        why="title didn't match, kept provisional",
+    )
+    assert not any("witness:" in line for line in cli._conflict_lines(conflict))

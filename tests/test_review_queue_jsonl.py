@@ -143,3 +143,41 @@ def test_replace_all_rewrites_as_jsonl_survivors(tmp_path):
     ]
     lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 2
+
+
+def test_round_trips_the_witness_rationale(tmp_path):
+    # #74: the rationale must survive to the --review run like the rest of the
+    # conflict; an older record without the key loads with an empty rationale.
+    path = tmp_path / "review-queue.jsonl"
+    item = ReviewItem(
+        source_url="https://youtu.be/c",
+        reason="unverified: no independent witness to confirm the Match",
+        conflict=MatchConflict(
+            heard=Match(title="Have You Seen Her", artist="Donell Jones", album="", confidence=1.0),
+            source_artist="",
+            uploader="Donell Jones",
+            why="the identity witness ruled the Match inconsistent with the video, kept provisional",
+            witness_rationale="the cover names the album, not the song",
+        ),
+    )
+    JsonReviewQueue(path).enqueue(item)
+    got = JsonReviewQueue(path).items()[0]
+    assert got.conflict is not None
+    assert got.conflict.witness_rationale == "the cover names the album, not the song"
+
+
+def test_an_old_conflict_record_without_a_rationale_loads_empty(tmp_path):
+    import json
+
+    path = tmp_path / "review-queue.jsonl"
+    record = {
+        "source_url": "https://youtu.be/old", "reason": "r", "tags": None,
+        "output_path": None, "audio_path": None,
+        "conflict": {
+            "heard": {"title": "T", "artist": "A", "confidence": 1.0},
+            "source_artist": "", "uploader": "A", "why": "w",
+        },
+    }
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    got = JsonReviewQueue(path).items()[0]
+    assert got.conflict is not None and got.conflict.witness_rationale == ""

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from muzik.artist import place_feature_credit
 from muzik.domain import (
+    IdentityRuling,
     IdentityVerdict,
     Match,
     MatchConflict,
@@ -671,10 +672,10 @@ def _confidence_gate(
     # written verified — never the possibly-reversed Source parse.
     if title_agrees:
         second = second_source.identify(track) if second_source is not None else None
-        verdict = _identity_verdict(track, match, second, resolver)
-        if verdict == "consistent":
+        ruling = _identity_ruling(track, match, second, resolver)
+        if ruling.verdict == "consistent":
             return replace(tags, verified=True), None, None
-        return _unverified(tags, track, match, verdict)
+        return _unverified(tags, track, match, ruling.verdict, ruling.rationale)
 
     # The title names a different recording — a real contradiction. Never write the
     # Match as truth; fall back to the Source's own identity, best-effort. No AI.
@@ -686,11 +687,14 @@ def _unverified(
     track: Track,
     match: Match,
     verdict: IdentityVerdict | None,
+    rationale: str = "",
 ) -> tuple[Tags, str, MatchConflict]:
     """The provisional outcome: Source-parsed Tags, or the kept-but-unverified Match.
 
     ``verdict`` is the identity witness's ruling when it was consulted (``None`` on
     the contradicted path, where no witness ran) — it shapes only the explanation.
+    ``rationale`` is the witness's own sentence for that ruling (#74), carried onto
+    the conflict so the Review output can show the reasoning, not just the verdict.
     """
     uploader_artist = _normalise_uploader(track.uploader)
     conflict = MatchConflict(
@@ -701,6 +705,7 @@ def _unverified(
         # show a "video/channel says:" witness the ``why`` line calls absent.
         uploader=uploader_artist,
         why=_conflict_why(match, track, verdict),
+        witness_rationale=rationale,
     )
     provisional = _provisional_from_source(track.source_title, uploader_artist)
     if provisional is not None:
@@ -733,22 +738,23 @@ def _conflict_why(match: Match, track: Track, verdict: IdentityVerdict | None) -
     return "the identity witness couldn't confirm the Match, kept provisional"
 
 
-def _identity_verdict(
+def _identity_ruling(
     track: Track, match: Match, second: Match | None, resolver: Resolver
-) -> IdentityVerdict:
+) -> IdentityRuling:
     """Ask the Resolver to witness the Match's identity, degrading safely (ADR-0002).
 
     ``second`` is the second acoustic identification (AcoustID, #51) when one ran,
-    ``None`` otherwise; the witness weighs it as corroborating evidence. Any failure
-    or timeout in the AI call is treated as ``unsure`` — the Track stays unverified
-    and goes to Review, but the batch never blocks. (The real Resolver also degrades
-    internally; this is the belt-and-braces boundary so a misbehaving provider can't
-    abort a batch.)
+    ``None`` otherwise; the witness weighs it as corroborating evidence. The whole
+    ruling comes back — verdict and the witness's one-sentence rationale (#74).
+    Any failure or timeout in the AI call is treated as ``unsure`` — the Track
+    stays unverified and goes to Review, but the batch never blocks. (The real
+    Resolver also degrades internally; this is the belt-and-braces boundary so a
+    misbehaving provider can't abort a batch.)
     """
     try:
-        return resolver.witness_identity(track, match, second).verdict
+        return resolver.witness_identity(track, match, second)
     except Exception:
-        return "unsure"
+        return IdentityRuling(verdict="unsure", rationale="")
 
 
 def _with_thumbnail_fallback(track: Track, tags: Tags, providers: Providers) -> Tags:

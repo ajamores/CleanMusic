@@ -123,6 +123,10 @@ class MatchConflict:
     uploader: str
     #: A short line: which witness failed, and that the Track was kept provisional.
     why: str
+    #: The identity witness's own one-sentence rationale for its ruling (#74), so
+    #: the Review output shows the judge's reasoning, not just the verdict. "" on
+    #: the contradicted path (no witness ran) and for pre-#74 queue records.
+    witness_rationale: str = ""
 
 
 @dataclass(frozen=True)
