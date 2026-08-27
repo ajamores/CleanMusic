@@ -690,3 +690,12 @@ def test_captured_tags_are_copied_not_aliased_to_yt_dlps_list():
     )
     entry_tags.append("mutated")
     assert track.tags == ["soul"]
+
+
+def test_the_js_challenge_solver_may_be_fetched(tmp_path):
+    # #80: without the EJS remote component allowed, yt-dlp ≥2026.08 cannot solve
+    # YouTube's n/signature challenges and YouTube serves the throttled fallback
+    # (~66KiB/s on the #66 full run). deno runs the solver; this lets yt-dlp
+    # fetch the solver script itself (once, then cached).
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+    assert opts["remote_components"] == ["ejs:github"]

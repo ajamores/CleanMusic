@@ -172,3 +172,28 @@ def test_a_bare_track_payload_still_degrades_field_by_field(monkeypatch):
     assert (match.title, match.artist, match.album) == ("", "", "")
     assert match.isrc is None
     assert match.cover_art is None
+
+
+def test_a_recognize_that_never_answers_times_out_instead_of_hanging(monkeypatch):
+    # #79: a tarpitted Shazam (accepts the connection, never replies) must become
+    # a raised timeout — which the RateLimitedFingerprinter turns into retry →
+    # noted miss — never an indefinite hang of the worker (observed live: all 4
+    # workers wedged in recognize with no timeout, full run held hostage).
+    import asyncio
+    from pathlib import Path
+
+    import pytest
+
+    from muzik.domain import Track
+    from muzik.real.fingerprinter import ShazamFingerprinter
+
+    class _TarpitShazam:
+        async def recognize(self, path):
+            await asyncio.sleep(3600)
+
+    monkeypatch.setattr(fingerprinter, "Shazam", _TarpitShazam)
+    monkeypatch.setattr(fingerprinter, "_to_wav", lambda src, dst: None)
+
+    fp = ShazamFingerprinter(recognize_timeout=0.05)
+    with pytest.raises(Exception):  # asyncio.TimeoutError; any raise lets the wrapper retry
+        fp.identify(Track(source_url="https://youtu.be/x", audio_path=Path("/fake/a.m4a")))

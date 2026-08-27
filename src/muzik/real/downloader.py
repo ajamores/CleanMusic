@@ -262,6 +262,13 @@ class YtDlpDownloader:
             # yt-dlp's extractor-keyed ``download_archive`` (the #28/#29 coupling):
             # a reason string skips the entry, None lets it download.
             "match_filter": self._skip_already_fetched,
+            # yt-dlp ≥2026.08 solves YouTube's n/signature challenges with an
+            # external JS component (run by deno) that it must be *allowed* to
+            # fetch (#80). Without this, every download silently degrades to
+            # YouTube's throttled fallback (~66KiB/s on the #66 full run —
+            # ~80s/Track instead of ~4s). Fetched once from yt-dlp's own GitHub
+            # distribution, then cached. See docs/LEARNINGS.md (JS runtime entry).
+            "remote_components": ["ejs:github"],
             # Each fully-landed Track's id is recorded in the manifest — after all
             # postprocessing, the point yt-dlp's own archive recorded at (#49).
             "post_hooks": [self._record_fetched],
