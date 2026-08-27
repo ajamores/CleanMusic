@@ -140,6 +140,7 @@ def _conflict_record(conflict: MatchConflict | None) -> dict | None:
         "source_artist": conflict.source_artist,
         "uploader": conflict.uploader,
         "why": conflict.why,
+        "witness_rationale": conflict.witness_rationale,
     }
 
 
@@ -182,4 +183,6 @@ def _conflict_from_record(raw: dict | None) -> MatchConflict | None:
         source_artist=raw["source_artist"],
         uploader=raw["uploader"],
         why=raw["why"],
+        # Absent on pre-#74 records: degrade to "no rationale", never a KeyError.
+        witness_rationale=raw.get("witness_rationale", ""),
     )

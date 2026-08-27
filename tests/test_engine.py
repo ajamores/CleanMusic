@@ -573,3 +573,39 @@ def test_no_match_routes_to_the_review_queue():
     # Written best-effort from the Source; no thumbnail wired, so no cover art.
     assert len(writer.written) == 1
     assert writer.written[0][1].cover_art is None
+
+
+def test_the_witness_rationale_is_carried_onto_the_conflict():
+    # #74: the witness writes a one-sentence rationale with every ruling; the #66
+    # slice run showed a false rejection explained by nothing because the gate
+    # discarded it. On the uncorroborated path the ruling's rationale now rides
+    # the conflict, so the batch and --review output can show the judge's reasoning.
+    match = Match(title="Drift Away", artist="Dobie Gray", album="", confidence=0.62)
+    resolver = FakeResolver(verdict="inconsistent")  # rationale: "fake: inconsistent"
+    results = run(
+        Source(url="https://youtu.be/x"),
+        _providers(
+            match,
+            FakeTagWriter(),
+            source_title="Ab-Soul - Drift Away",
+            uploader="Top Dawg Entertainment",
+            resolver=resolver,
+        ),
+    )
+
+    conflict = results[0].conflict
+    assert conflict is not None
+    assert conflict.witness_rationale == "fake: inconsistent"
+
+
+def test_a_contradicted_track_has_no_witness_rationale():
+    # The contradicted path never consults the witness — nothing to quote.
+    match = Match(title="Zzz", artist="Nobody", album="", confidence=0.99)
+    results = run(
+        Source(url="https://youtu.be/x"),
+        _providers(match, FakeTagWriter(), source_title="Ogi - Envy"),
+    )
+
+    conflict = results[0].conflict
+    assert conflict is not None
+    assert conflict.witness_rationale == ""
