@@ -1,7 +1,7 @@
 ---
 type: meta
 title: "Hot — muziktest"
-updated: 2026-08-25
+updated: 2026-08-26
 tags: [meta, hot-cache]
 status: evergreen
 ---
@@ -12,29 +12,36 @@ status: evergreen
 
 ## What this repo is
 
-Muzik — downloads music from a YouTube **Source** and writes verified **Tags** into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script); core engine + CLI now, web later. Provider seams wired in `cli.py`: yt-dlp, **Shazam** fingerprint, **AcoustID** second fingerprint, **MusicBrainz** album-by-ISRC/recording, **Haiku** Resolver, MP3/M4A writers, thumbnail fetcher, JSON review queue. Identity comes from the fingerprint; the Resolver is the **identity witness** the gate verifies on (ADR-0006).
+Muzik — downloads music from a YouTube **Source** and writes verified **Tags** into each **Track**. Python (`uv`, `src/muzik`, `muzik` console script); core engine + CLI now, web later. Provider seams wired in `cli.py`: yt-dlp, **Shazam** fingerprint (rate-limited 1s + retry, #63), **AcoustID** second fingerprint, **MusicBrainz** album lookup, **Haiku** identity witness (ADR-0006), MP3/M4A writers, JSON review queue.
 
-## Current State (2026-08-25)
+## Current State (2026-08-26)
 
-- **On `main`, clean.** Three tickets shipped this session's chain: #45, #52, #51.
-- **#51 done (PR #55, `2423c3f`).** AcoustID is a **second acoustic witness** fed to the ADR-0006 witness — not a blind fallback. Runs only on the uncorroborated + Shazam-miss paths; the corroborated fast path stays Shazam-only (test-enforced). Album hydrates by MusicBrainz recording id (reuses #45's tier), primary Match only. New dep `pyacoustid`; needs `fpcalc` + `ACOUSTID_API_KEY` (self-disables without them).
+- **On `main`, clean** except a pre-existing unexplained `uv.lock` modification (not this session's).
+- **Epic #66 (seed the library, 404-Track playlist): all gates closed, mid-verification.** Shipped today: #62 per-Track guard, #63 Shazam throttle, #69 `--limit N`, #71 dead-entry guard, #73 witness album-cover fix, #74 witness rationale in output (PRs #67/68/70/72/76/77).
+- **Slice run (20) done:** 17 verified, 1 review (cleared). Dup entry at positions 12/13; dead entries at 353/357/404 → now clean skips.
+- **Navidrome up for verification:** docker container `navidrome-muzik`, port 4533, music = `downloads/` (ro), data `~/navidrome/data`, 1-min rescan. **First visit http://localhost:4533 must create the admin user — the `.m3u8` imports only after that.** (An older stopped `navidrome` container belongs to `~/github/music-stack` — untouched.)
 
-## Frontier (open — priority order)
+## Next (epic #66 remainder)
 
-- **#46 — live contract smoke tests (`ready-for-agent`).** Shazam / MusicBrainz / Haiku. MB (#45) and yt-dlp (#30) smokes exist, and #51 added an AcoustID smoke — but Shazam and Haiku live contracts are still unwritten. The gap that hid #45.
-- **#47 — artist-name normalisation across written Tags (spec US#26, `ready-for-agent`, unbuilt).**
-- **#48 — route classical Tracks to Review (spec US#25, `ready-for-human`).** Needs a human decision first.
-- **#49 — harden idempotency / archive re-run detection (`ready-for-human`).** Needs a human decision first.
-- **#50 — 60s fingerprint window (`needs-triage`, low).**
+1. `time uv run muzik "<playlist-url>" --playlist --limit 100` — note wall-clock (throttle Fog, #63).
+2. Then `--limit 150`, then full (no limit).
+3. Verify in Navidrome: `.m3u8` import, artist grouping, artwork.
+4. `muzik --review` to clear; the queue's real size decides UI scope → ticket it, close #66.
+
+Watch for: repeat witness false-inconsistents (rationale now prints — `witness: "…"` line); the two >10-min tracks (evidence for #50); AcoustID missing newer/indie tracks is normal.
+
+## Frontier (open, none gating the runs)
+
+- #64 incremental queue/`.m3u8` writes, #65 manifest-tick-after-tagging — deferred unless a run bites.
+- #75 show AcoustID's opinion in output — post-epic polish.
+- #50 60s fingerprint window (watch), #48 classical routing (`ready-for-human`).
 
 ## Recent sessions (rolling — last 2–3)
 
-- **2026-08-25 — #51 AcoustID second witness.** Merged via PR #55. Branched off main *after* merging #52 first (kept #51 an independent PR). Two-axis review caught a throwaway MB lookup on the second-opinion path → fixed by the recording-id design.
-- **2026-08-25 — #52 artwork fallback.** Thumbnail as fallback cover art so no Track ships bare (PR #54). Added shared `real/images.fetch_thumbnail`.
-- **Earlier — #45 MusicBrainz album tier fix (PR #53).** Two-lookup ISRC→recording→release-groups; unblocked #51.
+- **2026-08-26 — epic #66 gates + slice + witness bug.** Six tickets shipped (above). Slice run exposed a reproducible witness false-negative: Haiku anchored on the album cover's printed title over all text evidence → fixed deterministically by withholding the cover on auto-generated uploads (#73, live-verified 6/6); LEARNINGS entry filed. Smoke suite green (needs `.env` keys exported manually).
+- **2026-08-25 — #51 AcoustID second witness** (PR #55), plus #52 artwork fallback, #45 MusicBrainz album tier.
 
 ## Where the rest of the context lives
 
-- **Decisions:** `docs/adr/` (`0006` = identity witness, now amended for #51). **Glossary:** `CONTEXT.md`. **Spec:** issue #1 (closed).
-- **Observation harness:** `tools/observe.py` (`python tools/observe.py <url>`); output → gitignored `retest/` (fresh `--out`). **Smoke:** `pytest -m smoke` (opt-in; skips w/o network/toolchain).
-- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md` (needs deno + ffmpeg + `fpcalc` on PATH). **Garden:** `/graft`, not this board.
+- **Decisions:** `docs/adr/`. **Glossary:** `CONTEXT.md`. **Tickets/epic:** GitHub Issues (#66 map, evidence in its comments).
+- **Paid-for mistakes:** `docs/LEARNINGS.md` (read before work). **Dev setup:** `docs/DEVELOPMENT.md` (deno + ffmpeg + `fpcalc`). **Smoke:** `pytest -m smoke`. **Garden:** `/graft`, not this board.
