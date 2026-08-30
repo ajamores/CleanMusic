@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clean Muzik</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="icon" type="image/png" href="./assets/logo.png">
+</head>
+<body>
+  <header class="masthead">
+    <a class="wordmark" href="#/run">
+      <span class="crest"><img src="./assets/logo.png" alt="" width="34" height="34"></span>
+      <span class="wordmark-text">Clean&nbsp;Muzik</span>
+      <span class="lamp" id="run-lamp" aria-hidden="true"></span>
+    </a>
+    <nav class="nav" aria-label="Views">
+      <a href="#/run" data-route="run">Run</a>
+      <a href="#/review" data-route="review">Review <span class="badge" id="review-badge" hidden></span></a>
+      <a href="#/settings" data-route="settings">Settings</a>
+    </nav>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <script type="module">
+    // Mock layer is opt-in via ?mock=1 and must be installed before any view
+    // touches fetch/EventSource — hence the dynamic import gate here.
+    if (new URLSearchParams(location.search).has("mock")) {
+      await import("./dev-mock.js");
+    }
+    await import("./app.js");
+  </script>
+</body>
+</html>

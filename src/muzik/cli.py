@@ -3,165 +3,38 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from muzik.domain import (
-    IdentityRuling,
-    Match,
     MatchConflict,
     ReviewDecision,
     ReviewItem,
     Source,
     Tags,
-    Track,
 )
 from muzik.engine import Providers, ReviewOutcome, clear_review_queue, run, summarize
-from muzik.providers import Fingerprinter, PlaylistInSingleModeError, Resolver
-from muzik.real.acoustid import AcoustIdFingerprinter
-from muzik.real.authority import RateLimitedAuthority, ShazamOwnAuthority
-from muzik.real.downloader import YtDlpDownloader
-from muzik.real.fingerprinter import RateLimitedFingerprinter, ShazamFingerprinter
-from muzik.real.images import HttpThumbnailFetcher
-from muzik.real.playlist import M3u8PlaylistWriter
-from muzik.real.resolver import HaikuResolver
-from muzik.real.review_queue import JsonReviewQueue
-from muzik.real.tagwriter import Mp3TagWriter, Mp4TagWriter
-from muzik.settings import OutputFormat, Settings, load_settings, save_settings
+from muzik.providers import PlaylistInSingleModeError
 
-# CLI spellings for the saved formats.
-_FORMAT_CHOICES = {"m4a": OutputFormat.M4A, "mp3-320": OutputFormat.MP3_320}
+# Provider assembly is shared with the web adapter (ADR-0010): both are thin
+# siblings over the engine, so the wiring is one module, not two copies. The
+# private aliases keep this module's own surface (and its tests) unchanged.
+from muzik.wiring import (
+    FORMAT_CHOICES as _FORMAT_CHOICES,
+    DisabledResolver as _DisabledResolver,
+    build_acoustid as _build_acoustid,
+    build_downloader as _build_downloader,
+    build_providers as _build_providers,
+    build_resolver as _build_resolver,
+    resolve_format as _resolve_format,
+)
 
+__all__ = ["main"]
 
-class _DisabledResolver:
-    """The AI Resolver tier, switched off when no Claude key is configured.
-
-    The key comes from the environment / gitignored .env (``load_dotenv`` in
-    ``main``). Without it the last waterfall tier proposes nothing rather than
-    crashing the batch on client construction — Tracks it would have resolved get
-    provisional Tags and a place in the Review queue instead (CONTEXT.md: the
-    batch never blocks).
-    """
-
-    def resolve(self, track: Track, match: Match | None) -> Match | None:
-        return None
-
-    def witness_identity(
-        self, track: Track, match: Match, second: Match | None = None
-    ) -> IdentityRuling:
-        # No key, no witness: the gate keeps the Match unverified and routes it to
-        # Review, exactly as an ``unsure`` verdict would (CONTEXT.md: never block).
-        return IdentityRuling(verdict="unsure", rationale="AI Resolver disabled (no API key)")
-
-
-def _build_resolver() -> Resolver:
-    """The real Haiku Resolver when a Claude key is present, else a disabled one.
-
-    An absent key is reported once, plainly, and degrades the AI tier instead of
-    failing — see ``_DisabledResolver``.
-    """
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print(
-            "note: no ANTHROPIC_API_KEY (set it in the environment or a .env file) — "
-            "the AI Resolver is disabled (album waterfall and identity witness); "
-            "Tracks needing it go to review."
-        )
-        return _DisabledResolver()
-    return HaikuResolver()
-
-
-#: Minimum seconds between Shazam ``recognize`` starts (#63). Calls still overlap
-#: (only their starts are spaced), so at ~2s per recognize this costs a 4-worker
-#: batch little wall-clock while capping the request rate at 1/s from this IP —
-#: the same figure the MusicBrainz tier has run safely at. The slice run of the
-#: seeding batch (#66) is where a smaller interval would be measured and argued.
-_SHAZAM_MIN_INTERVAL = 1.0
-
-#: AcoustID asks applications to stay under ~3 requests/second; it is consulted
-#: only on the witness's unsure/miss paths, so this spacing is rarely even felt.
-_ACOUSTID_MIN_INTERVAL = 0.35
-
-
-def _build_acoustid() -> Fingerprinter:
-    """The second acoustic source (AcoustID, #51), reported once when disabled.
-
-    Like the Resolver, it self-disables without a key: ``AcoustIdFingerprinter``
-    identifies nothing when ``ACOUSTID_API_KEY`` is absent, so the identity witness
-    simply falls back to Shazam alone. The note tells the user the second witness is
-    off (and that ``fpcalc`` is also required — see docs/DEVELOPMENT.md). A keyed
-    AcoustID is rate-limited like Shazam (#63); a keyless one is left bare — its
-    instant ``None`` needs no spacing.
-    """
-    if not os.environ.get("ACOUSTID_API_KEY"):
-        print(
-            "note: no ACOUSTID_API_KEY (set it in the environment or a .env file) — "
-            "the second acoustic witness (AcoustID) is disabled; identity checks use "
-            "Shazam alone."
-        )
-        return AcoustIdFingerprinter()
-    # For AcoustID the wrapper contributes *spacing only*: the adapter swallows
-    # its own failures to a miss (see acoustid.py), so the retry path never fires.
-    # Deliberate — a second opinion is optional evidence, not worth retry latency.
-    return RateLimitedFingerprinter(
-        AcoustIdFingerprinter(), min_interval=_ACOUSTID_MIN_INTERVAL
-    )
-
-
-def _build_downloader(
-    out_dir: Path,
-    cookies: Path | None,
-    fmt: OutputFormat,
-    expand_playlist: bool = False,
-    limit: int | None = None,
-) -> YtDlpDownloader:
-    return YtDlpDownloader(
-        out_dir=out_dir,
-        cookies=cookies,
-        output_format=fmt,
-        expand_playlist=expand_playlist,
-        playlist_limit=limit,
-    )
-
-
-def _build_providers(
-    downloader: YtDlpDownloader, fmt: OutputFormat, out_dir: Path
-) -> Providers:
-    tagwriter = Mp4TagWriter() if fmt is OutputFormat.M4A else Mp3TagWriter()
-    return Providers(
-        downloader=downloader,
-        # Spaced and retried (#63): a ~400-Track batch must not fire hundreds of
-        # rapid recognize calls from one IP, and a transient failure retries with
-        # backoff instead of silently flooding the Review queue as misses.
-        fingerprinter=RateLimitedFingerprinter(
-            ShazamFingerprinter(), min_interval=_SHAZAM_MIN_INTERVAL
-        ),
-        # A playlist runs Tracks concurrently (#8), so the MusicBrainz tier is
-        # spaced to ~1 req/sec — its documented rate limit (ADR-0002).
-        authority=RateLimitedAuthority(ShazamOwnAuthority(), min_interval=1.0),
-        resolver=_build_resolver(),
-        tagwriter=tagwriter,
-        review_queue=JsonReviewQueue(out_dir / "review-queue.jsonl"),
-        # Writes a .m3u8 only on a --playlist expansion (#25); a single-mode run
-        # leaves the Downloader's playlist_title None, so the engine calls it not.
-        playlist_writer=M3u8PlaylistWriter(out_dir),
-        # Fallback cover art (#52): a Track left bare by identification gets its
-        # video thumbnail embedded instead of shipping with no art.
-        thumbnail_fetcher=HttpThumbnailFetcher(),
-        # Second acoustic witness (#51): AcoustID, consulted only on the unsure/miss
-        # paths (ADR-0006) — the fast path stays Shazam-only (#38).
-        acoustid=_build_acoustid(),
-    )
-
-
-def _resolve_format(chosen: str | None) -> OutputFormat:
-    """Persist an explicit --format choice, else read the saved setting."""
-    if chosen is not None:
-        fmt = _FORMAT_CHOICES[chosen]
-        save_settings(Settings(output_format=fmt))
-        return fmt
-    return load_settings().output_format
+# Referenced so the shared-wiring aliases read as this module's deliberate
+# surface rather than unused imports.
+_ = (_FORMAT_CHOICES, _DisabledResolver, _build_acoustid, _build_resolver)
 
 
 def _describe(item: ReviewItem) -> str:
