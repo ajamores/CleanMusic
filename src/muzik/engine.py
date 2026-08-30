@@ -12,6 +12,7 @@ touching the others: #3/#4 grow ``_album_waterfall``, #5 fills ``_confidence_gat
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -148,71 +149,98 @@ def run(
 
     A playlist Source expands into many Tracks (#8); once downloaded they are
     independent, so the per-Track pipeline (``_process_track``) runs across a
-    bounded thread pool and the results come back in Track order. Every reviewable
-    Track — a gate failure, an unidentified Track, or a Downloader skip — is then
-    appended to the Review queue with a reason, and the batch runs to completion
-    regardless (CONTEXT.md: the batch never blocks).
+    bounded thread pool and the results are drained in Track order. Every
+    reviewable Track — a gate failure, an unidentified Track, or a Downloader
+    skip — is appended to the Review queue with a reason, and the batch runs to
+    completion regardless (CONTEXT.md: the batch never blocks).
+
+    Outcomes are flushed **as each Track finishes**, not end-of-batch (#64): the
+    Review entry is enqueued and the ``.m3u8`` re-merged the moment a Track's
+    result is drained, so an interrupted batch — a wedged provider killed mid-run,
+    the #66 incident — keeps every finished Track's outcome on disk. Enqueueing
+    stays on this thread, not the workers: the drain loop is the results queue, so
+    the Review queue keeps its single writer (its append needs no lock) and its
+    deterministic order — reviewable Tracks in playlist order, then the
+    Downloader's own skips. Two deliberate limits of that determinism: in-order
+    draining lets one wedged Track hold back the flush of later-finished ones
+    (accepted — a single wedge is already bounded into an error by the provider
+    timeouts, #79, and a provider-wide tarpit starves the whole pool regardless,
+    docs/LEARNINGS.md); and the Downloader's skips stay end-written to keep their
+    place after the Tracks (safe — a skipped entry never reaches the manifest, so
+    an interrupted batch's re-run re-derives it, unlike a finished Track's
+    unrepeatable outcome).
     """
     tracks = providers.downloader.download(source)
-    results = _process_tracks(tracks, providers, concurrency)
-    # ``_process_tracks`` guards each Track (#62), so from here every Track has a
-    # result — a crash on one becomes its own reviewable failure, never an abort.
-    # Enqueue on this thread, not the workers: it keeps the Review queue a single
-    # writer (its append needs no lock) and the queue order deterministic —
-    # reviewable Tracks in playlist order, then the Downloader's own skips.
-    for track, result in zip(tracks, results):
+    playlist_title = providers.downloader.playlist_title
+    results: list[TrackResult] = []
+    entries: list[PlaylistEntry] = []
+    for track, result in _iter_processed(tracks, providers, concurrency):
+        results.append(result)
         if result.reason is not None:
             providers.review_queue.enqueue(_review_item(result, track))
+        if result.output_path is not None and result.tags is not None:
+            entries.append(_playlist_entry(track, result))
+            _flush_playlist(playlist_title, entries, providers)
     for source_url, reason in providers.downloader.skipped:
         providers.review_queue.enqueue(ReviewItem(source_url=source_url, reason=reason))
-    _write_playlist(tracks, results, providers)
+    # Final flush even when no Track landed an entry this run: it refreshes a prior
+    # run's ``.m3u8`` (pruning vanished files) and sets ``last_written`` for the
+    # CLI's report — the pre-#64 behaviour for the empty case.
+    _flush_playlist(playlist_title, entries, providers)
     return results
 
 
-def _write_playlist(
-    tracks: list[Track], results: list[TrackResult], providers: Providers
+def _playlist_entry(track: Track, result: TrackResult) -> PlaylistEntry:
+    """The ``.m3u8`` line for a Track that produced a file (#25): its duration for
+    ``#EXTINF``, and the canonical artist/title/path the write reported back."""
+    assert result.tags is not None and result.output_path is not None
+    return PlaylistEntry(
+        duration=track.duration,
+        artist=result.tags.artist,
+        title=result.tags.title,
+        path=result.output_path,
+    )
+
+
+def _flush_playlist(
+    title: str | None, entries: list[PlaylistEntry], providers: Providers
 ) -> None:
-    """Preserve a ``--playlist`` run's grouping as one ``.m3u8`` beside the Tracks (#25).
+    """Write the ``.m3u8`` for a ``--playlist`` run, preserving its grouping (#25).
 
     Only a real playlist expansion has a title to write under (the Downloader sets
-    ``playlist_title`` then, ``None`` in single mode — no list, no file). Lists only
-    the Tracks that produced a file, in playlist order, so a fingerprint miss or a
-    failed download leaves no dead pointer; ``results`` line up with ``tracks`` by
-    index, which is where each Track's duration for ``#EXTINF`` comes from.
+    ``playlist_title`` then, ``None`` in single mode — no expansion, no file).
+    Called per finished Track and once at the end (#64), always with the cumulative
+    ``entries`` rather than a delta: the writer's merge is idempotent and prunes
+    dead pointers, and a whole-file rewrite of a few hundred lines is nothing next
+    to a download.
     """
-    title = providers.downloader.playlist_title
     if title is None:
         return
-    entries = [
-        PlaylistEntry(
-            duration=track.duration,
-            artist=result.tags.artist,
-            title=result.tags.title,
-            path=result.output_path,
-        )
-        for track, result in zip(tracks, results)
-        if result.output_path is not None and result.tags is not None
-    ]
-    providers.playlist_writer.write(title, entries)
+    providers.playlist_writer.write(title, list(entries))
 
 
-def _process_tracks(
+def _iter_processed(
     tracks: list[Track], providers: Providers, concurrency: int
-) -> list[TrackResult]:
-    """Run the per-Track pipeline over a bounded thread pool, preserving order.
+) -> Iterator[tuple[Track, TrackResult]]:
+    """Run the per-Track pipeline over a bounded thread pool, yielding in order.
 
-    ``ThreadPoolExecutor.map`` yields results in submission order, so the returned
-    list lines up with ``tracks`` regardless of which finished first. An empty
-    playlist needs no pool. Each Track is guarded (#62): an exception from any
-    stage becomes that Track's own failed result rather than propagating — with
-    the Review queue and ``.m3u8`` written only after processing, one corrupt
-    file must not discard a whole batch's identification work.
+    ``ThreadPoolExecutor.map`` submits every Track up front and its iterator
+    yields results in submission order as they complete, so each ``(track,
+    result)`` pair reaches the caller the moment its Track — and all before it —
+    are done, regardless of which finished first. That in-order stream is what
+    lets ``run`` flush outcomes incrementally (#64). An empty playlist needs no
+    pool. Each Track is guarded (#62): an exception from any stage becomes that
+    Track's own failed result rather than propagating — one corrupt file must
+    not abort the batch. (A BaseException — Ctrl+C — still escapes, and by then
+    every earlier Track's outcome has already been flushed.)
     """
     if not tracks:
-        return []
+        return
     workers = max(1, min(concurrency, len(tracks)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(lambda track: _process_track_guarded(track, providers), tracks))
+        yield from zip(
+            tracks, pool.map(lambda track: _process_track_guarded(track, providers), tracks)
+        )
 
 
 def _process_track_guarded(track: Track, providers: Providers) -> TrackResult:

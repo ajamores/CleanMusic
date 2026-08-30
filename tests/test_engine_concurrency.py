@@ -211,5 +211,8 @@ def test_reviewable_tracks_are_enqueued_once_each_under_concurrency():
     )
 
     assert len(results) == 3
-    queued = [item.source_url for item in queue.items()]
-    assert len(queued) == 2  # exactly the two gate failures, each enqueued once
+    # Exactly the two gate failures, each enqueued once — and in playlist order,
+    # the deterministic-order contract the main-thread drain keeps (#64) even
+    # when workers finish out of order.
+    queued = [item.tags.title for item in queue.items()]
+    assert queued == ["Other Song", "Third"]
