@@ -1,0 +1,312 @@
+/* Run view. DESIGN.md 5.1.
+   The shared vocabulary (buttons, inputs, switch, chips, figures, plate, the
+   view head) lives in shell.css; only what is specific to Run is here.
+   No overflow is set on anything: .work is the only scroll container. */
+
+/* ==================================================== the Source form ==== */
+
+.run-form { margin-bottom: var(--sp-8); }
+
+/* The input and the Run button are butted with no gap, sharing a seam. */
+.url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 168px;
+}
+.url-row input { font-family: var(--font-mono); font-size: var(--t-data); }
+
+.options-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--sp-4) var(--sp-5);
+  margin-top: var(--sp-5);
+}
+.options-row .opt { display: block; }
+.options-row .opt input,
+.options-row .opt select { width: 132px; }
+/* The switch carries its own tap height, so it needs no label above it; it
+   only wants a little air before the first labelled field. */
+.options-row .switch { margin-right: var(--sp-2); }
+
+.run-form .inline-error { margin-top: var(--sp-5); }
+
+/* ================================================== the run detail line == */
+
+/* The run's DETAIL line, not a duplicate of the rail: the word lives in the
+   on-air block. Running and done print the Source; a bad run prints the
+   server's own sentence, bordered so it reads from across the room. */
+.run-state-line {
+  margin-bottom: var(--sp-6);
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  line-height: var(--lh-data);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.run-state-line.is-refused,
+.run-state-line.is-failed {
+  max-width: 62ch;
+  padding: var(--sp-4);
+  border: var(--bw-ctl) solid var(--red);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--red);
+}
+
+/* ======================================================== the tracklist == */
+
+/* A legend for a list, and the only one in the view. */
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+.list-head .legend { margin: 0; }
+.list-head .rule { flex: 1; height: var(--bw-hair); background: var(--line-soft); }
+
+.tracklist { list-style: none; margin: 0; padding: 0; }
+.tracklist li {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+  min-height: var(--row-h);
+  padding-block: var(--sp-4);
+  border-bottom: var(--bw-hair) solid var(--line-soft);
+}
+.tracklist .chip { align-self: center; }
+
+/* The Track currently downloading: a real row, tinted, bled to the gutter. */
+.tracklist li.tk-live {
+  background: var(--surface);
+  padding-inline: var(--sp-4);
+  margin-inline: calc(var(--sp-4) * -1);
+}
+
+.tracklist .t-main { min-width: 0; }
+.tracklist .t-title {
+  font-size: var(--t-title);
+  font-weight: 600;
+  line-height: var(--lh-title);
+  color: var(--ink);
+}
+/* A Track with no Tags at all is known only by its Source. */
+.tracklist .t-title.is-url {
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.tracklist .t-artist {
+  font-size: var(--t-title);
+  font-weight: 400;
+  color: var(--ink-2);
+}
+.tracklist .t-meta {
+  max-width: 34ch;
+  font-size: var(--t-body);
+  color: var(--ink-2);
+  text-align: right;
+  /* A long album title yields the column rather than crushing the Track. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tracklist .t-speed { font-family: var(--font-mono); font-size: var(--t-data); }
+.tracklist .t-reason {
+  grid-column: 2 / -1;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--amber);
+}
+.tracklist .t-path {
+  grid-column: 2 / -1;
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  line-height: var(--lh-data);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.tracklist .t-progress {
+  grid-column: 2 / -1;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--teal-300);
+}
+
+/* Arrival enhances an already-visible row: with no animation the list is the
+   same list. Reduced motion never enters this block. */
+@media (prefers-reduced-motion: no-preference) {
+  .tracklist li.arrive { animation: tk-arrive var(--d-arrive) var(--ease-quart) both; }
+}
+@keyframes tk-arrive {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* ======================================================== the idle screen */
+
+/* The first screen the tool ever shows. An empty stage used to end the view
+   halfway up the work column; the tracklist's own empty state now says so in
+   words, and the ledger stands on the horizon so the slack between them is
+   composition rather than an accident. */
+.run-idle { margin-top: var(--sp-8); }
+
+.idle-empty {
+  max-width: 62ch;
+  font-size: var(--t-lede);
+  line-height: var(--lh-lede);
+  color: var(--ink-2);
+}
+
+/* Paired term and definition, two pairs across, so the block runs to the
+   right edge of the work column instead of stopping at a 48ch measure. */
+.run-ledger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-5);
+  align-items: baseline;
+  padding-top: var(--sp-4);
+  border-top: var(--bw-struct) solid var(--rule);
+}
+.run-ledger h2 {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-head2);
+  font-weight: 400;
+  line-height: var(--lh-head2);
+  color: var(--ink);
+}
+.ledger-term {
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--teal-300);
+}
+.ledger-def {
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--ink);
+}
+
+/* Inside .run-idle the flex gap is the rhythm, so the legend drops its own. */
+.run-idle .list-head { margin-bottom: 0; }
+
+/* The work column has a fixed height, so the idle block can take the slack and
+   set the ledger down on the horizon. Keyed on .run-view, which run.js puts on
+   the view element and takes off again in its teardown, so nothing here can
+   reach another view. The bare #view in the first two selectors is specificity,
+   not ownership: the shell declares the work column's flex contract on #view
+   itself, and a class-only selector cannot opt a child back into growing.
+   If the shell ever grows `#view > * { flex: none }` for every view, these two
+   lines can go and the Run-specific pair below is the whole rule. */
+@media (min-width: 901px) {
+  #view.run-view[data-run-state="idle"] { display: flex; flex-direction: column; }
+  #view.run-view[data-run-state="idle"] > * { flex: none; }
+
+  #view.run-view[data-run-state="idle"] > .run-idle {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    /* The gap is the floor between the empty state and the ledger; the auto
+       margin below adds the window's slack on top of it, and collapses to
+       nothing on a short window rather than pushing the ledger off. */
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
+  }
+  .run-view[data-run-state="idle"] .run-ledger { margin-top: auto; }
+}
+
+/* =========================================================== the summary = */
+
+.run-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-top: var(--sp-7);
+  padding: var(--sp-6);
+  background: var(--surface);
+}
+/* The terminal numerals are the biggest type in the view, by a wide margin. */
+.run-summary .figure b {
+  font-size: var(--t-display);
+  line-height: var(--lh-display);
+}
+.run-summary .to-review { margin-left: auto; }
+
+/* ========================================================== the appendix = */
+
+/* Quieter by position, never by opacity. */
+.appendix { margin-top: var(--sp-8); }
+.appendix h3 {
+  margin: var(--sp-7) 0 var(--sp-4);
+  font-family: var(--font-display);
+  font-size: var(--t-head2);
+  font-weight: 400;
+  line-height: var(--lh-head2);
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.appendix h3:first-child { margin-top: 0; }
+.appendix ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  columns: 2;
+  column-gap: var(--sp-8);
+}
+.appendix li {
+  break-inside: avoid;
+  padding-block: var(--sp-3);
+  border-bottom: var(--bw-hair) solid var(--line-soft);
+}
+.appendix .ax-url {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  line-height: var(--lh-data);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.appendix .ax-note {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: var(--t-body);
+  color: var(--ink-2);
+}
+
+/* ============================================================== mobile === */
+
+@media (max-width: 900px) {
+  .url-row { grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
+  .options-row { gap: var(--sp-4); }
+  .options-row .opt { flex: 1 1 132px; }
+  .options-row .opt input,
+  .options-row .opt select { width: 100%; }
+  .options-row .switch { flex: 1 0 100%; margin-right: 0; }
+
+  .tracklist li { grid-template-columns: 96px minmax(0, 1fr); }
+  .tracklist .t-meta { grid-column: 2; max-width: none; text-align: left; }
+
+  .run-summary { gap: var(--sp-5); padding: var(--sp-5); }
+  .run-summary .to-review { margin-left: 0; width: 100%; }
+
+  .appendix ul { columns: 1; }
+
+  .run-ledger { grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
+  .run-ledger .ledger-def { margin-bottom: var(--sp-4); }
+  .run-ledger .ledger-def:last-child { margin-bottom: 0; }
+
+  /* Once a run has started the stage leads and the form drops below it, with
+     the lede last: copy, not status. run.js MOVES those nodes (applyOrder), so
+     the reading order, the DOM order and the tab order stay one order. All
+     that is left here is the spacing that arrangement wants, scoped to
+     .run-view so no Run rule can reorder a shell component in another view. */
+  .run-view[data-run-state]:not([data-run-state="idle"]) > .run-form { margin: var(--sp-7) 0 0; }
+  .run-view[data-run-state]:not([data-run-state="idle"]) > .view-sub { margin: var(--sp-5) 0 0; }
+}

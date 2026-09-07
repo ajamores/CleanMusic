@@ -1,0 +1,35 @@
+/* Clean Muzik: the equaliser horizon. DESIGN.md section 6.
+   The band is a real grid row of the shell, not an overlay, so no text is
+   ever drawn over a bar at any scroll position. Contrast is a non-question. */
+
+.horizon {
+  grid-area: 2 / 1 / 3 / -1;
+  display: grid;
+  grid-template-rows: var(--horizon-h) auto;
+  background: var(--bg);
+  min-width: 0;
+  /* The whole band is decoration and sits in the thumb path on a phone, so the
+     wrapper is inert, not just its canvas. Nothing inside it is pressable. */
+  pointer-events: none;
+  /* The ground line. It closes the work column's scroll edge with a deliberate
+     structural rule (the same 3px teal as the rail edge and the lower third)
+     rather than leaving the column to end wherever the last glyph was cut. */
+  border-top: var(--bw-struct) solid var(--teal-700);
+}
+
+#eq {
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: var(--z-eq);
+  /* Bar tips dissolve before they reach the plate edge above. */
+  -webkit-mask-image: linear-gradient(to top, #000 68%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 68%, transparent 100%);
+}
+
+@media (max-width: 900px) {
+  /* Row 3 of the mobile shell. Without this the band would sit in the work
+     column's row and draw its bars behind the view's own text. */
+  .horizon { grid-area: 3 / 1; }
+}

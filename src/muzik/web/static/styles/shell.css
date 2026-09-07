@@ -1,0 +1,538 @@
+/* Clean Muzik: the shell and the shared component vocabulary.
+   DESIGN.md sections 2, 3, 4 and 7. Foundation lane only: a view may add
+   view-specific rules in its own file, never edit this one. */
+
+/* ======================================================== 2.2 GRID ===== */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100dvh;
+}
+
+/* The work column is the ONLY scroll container in the app. No view may set
+   overflow on a container of its own. */
+.work {
+  grid-area: 1 / 2;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--work-top) var(--gutter) var(--sp-8);
+  z-index: var(--z-content);
+  /* No bottom fade. A mask here rendered the last 24px of live functional text
+     at falling opacity on every view (the LIVE run row, the last line of prose,
+     the whole rulings block), which is exactly the thing this design bans. The
+     horizon's 3px teal rule (eq.css) is the scroll edge: harder and more
+     legible than a dissolve. The --sp-8 / --sp-7 bottom padding clears it. */
+  /* The native scrollbar, told which ink to use. Not a skinned one: no
+     ::-webkit- pseudo-element, the platform still draws and sizes the widget. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--teal-700) var(--bg);
+}
+
+/* Route change: the work column crossfades, the rail does not re-render and
+   the horizon does not restart. Content is visible by default; the animation
+   only enhances it. */
+.work.view-enter { animation: view-enter var(--d-state) linear; }
+@keyframes view-enter { from { opacity: 0; } }
+
+/* ==================================================== 2.3 THE RAIL ===== */
+
+.rail {
+  grid-area: 1 / 1;
+  z-index: var(--z-rail);
+  background: var(--plate-navy);
+  border-right: var(--bw-struct) solid var(--teal-700);
+  padding: var(--sp-7) var(--sp-6);
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  align-content: start;
+  min-width: 0;
+}
+
+.brand { display: block; text-decoration: none; }
+.brand:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+
+/* 4. The crest. Jersey patch, printed as one cut: on --plate-navy the teal
+   mark measured 1.86:1 and the two-tone read as a smudge, while the 103.5%
+   keyline behind it was a 2px halo that anti-aliased away at 240px and did
+   not exist at all at 120px. The white cut carries the same silhouette, the
+   same letterforms and the same crown, at about 13:1 on the rail, so the
+   badge is now the loudest thing on the page instead of the dimmest.
+   Do not tint, crop, rotate or animate the mark. */
+.crest {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+}
+.crest-mark { width: 100%; height: auto; }
+
+.strap {
+  grid-row: 2;
+  margin: var(--sp-5) 0 0;
+  padding-top: var(--sp-5);
+  border-top: var(--bw-ctl) solid var(--teal-700);
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* Nav: full-bleed rows to the rail's padding edges. */
+.nav {
+  grid-row: 3;
+  display: flex;
+  flex-direction: column;
+  margin: var(--sp-6) calc(var(--sp-6) * -1) 0;
+}
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 56px;
+  padding: 0 var(--sp-5);
+  font-family: var(--font-display);
+  font-size: var(--t-nav);
+  font-weight: 400;
+  line-height: 1;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-decoration: none;
+  transition: background-color var(--d-press) linear, color var(--d-press) linear;
+}
+.nav a:hover { background: var(--teal-900); }
+.nav a[aria-current="page"] { background: var(--teal-300); color: var(--accent-ink); }
+.nav a:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
+
+/* 3.5 Badge: a number, not a decoration. Hidden at zero. */
+.badge {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: var(--t-nav);
+  line-height: 1;
+  color: var(--amber);
+}
+.nav a[aria-current="page"] .badge { color: var(--accent-ink); }
+
+/* The 1fr row of the rail is empty navy on purpose. It is the composition. */
+
+.onair {
+  grid-row: 5;
+  display: grid;
+  gap: var(--sp-2);
+  align-content: end;
+  padding-top: var(--sp-7);
+  min-width: 0;
+}
+.onair-line { display: flex; align-items: center; gap: var(--sp-3); }
+
+/* 3.9 Lamp: a square, no radius, no glow. */
+.lamp {
+  width: 14px; height: 14px;
+  flex: none;
+  background: var(--line);
+  transition: background-color var(--d-state) linear;
+}
+.onair-word {
+  font-family: var(--font-display);
+  font-size: var(--t-state);
+  line-height: 1;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  transition: color var(--d-state) linear;
+}
+.onair-source {
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  line-height: var(--lh-data);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+@keyframes lamp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* setLamp(on) keeps its existing contract; setState paints the real state. */
+.lamp.on { background: var(--teal-300); animation: lamp-pulse 1.6s ease-in-out infinite; }
+.onair.is-running .lamp { background: var(--teal-300); animation: lamp-pulse 1.6s ease-in-out infinite; }
+.onair.is-running .onair-word { color: var(--teal-300); }
+.onair.is-done .lamp { background: var(--teal-300); animation: none; }
+.onair.is-done .onair-word { color: var(--teal-300); }
+.onair.is-refused .lamp,
+.onair.is-failed .lamp { background: var(--red); animation: none; }
+.onair.is-refused .onair-word,
+.onair.is-failed .onair-word { color: var(--red); }
+@media (prefers-reduced-motion: reduce) {
+  .lamp, .lamp.on, .onair.is-running .lamp { animation: none; }
+}
+
+/* ================================================ 2.5 LOWER THIRD ====== */
+
+.lower-third {
+  grid-row: 2;
+  position: relative;
+  z-index: var(--z-lower);
+  margin-left: var(--rail-w);
+  min-height: var(--lt-h);
+  background: var(--plate-navy);
+  border-top: var(--bw-struct) solid var(--teal-700);
+  padding: var(--sp-3) var(--gutter);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "cap   speed pct"
+    "title speed pct";
+  align-items: center;
+  column-gap: var(--sp-5);
+}
+/* The meter IS the plate's top edge. scaleX, never width. */
+.lt-meter {
+  position: absolute;
+  left: 0; top: calc(var(--bw-struct) * -1);
+  width: 100%; height: var(--bw-struct);
+  background: var(--teal-300);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms linear;
+}
+.lt-cap {
+  grid-area: cap;
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.lt-title {
+  grid-area: title;
+  font-size: var(--t-title);
+  font-weight: 600;
+  line-height: var(--lh-title);
+  color: var(--ink);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lt-speed {
+  grid-area: speed;
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  color: var(--ink-2);
+  text-align: right;
+}
+.lt-pct {
+  grid-area: pct;
+  font-family: var(--font-display);
+  font-size: var(--t-pct);
+  line-height: var(--lh-pct);
+  color: var(--teal-300);
+  white-space: nowrap;
+}
+.lt-pct b { font-weight: 400; }
+/* The per-cent sign rides at the numeral's cap height, in Archivo. */
+.lt-pct i {
+  font-family: var(--font-ui);
+  font-size: 0.42em;
+  font-weight: 700;
+  font-style: normal;
+  vertical-align: 1.05em;
+}
+
+/* ================================================== 3. COMPONENTS ====== */
+
+/* Focus, on every interactive element without exception. */
+:is(a, audio, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 3.1 Buttons. One shape, element-agnostic: an <a class="btn-quiet"> is
+   indistinguishable from the <button> beside it. */
+:is(button, .btn-primary, .btn-quiet, .btn-ghost) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--ctl-h);
+  padding-inline: var(--sp-5);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--t-btn);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: var(--tr-btn);
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color var(--d-press) linear, color var(--d-press) linear,
+              border-color var(--d-press) linear, transform var(--d-press) linear;
+}
+:is(button, .btn-primary, .btn-quiet, .btn-ghost):active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-primary { background: var(--teal-300); color: var(--accent-ink); }
+.btn-primary:hover:not(:disabled) { background: var(--teal-500); }
+.btn-primary:disabled { background: var(--line); color: var(--ink-2); cursor: not-allowed; }
+
+.btn-quiet { border: var(--bw-ctl) solid var(--line); color: var(--ink); }
+.btn-quiet:hover:not(:disabled) { border-color: var(--teal-500); }
+.btn-quiet:disabled { color: var(--ink-2); border-color: var(--line-soft); cursor: not-allowed; }
+
+.btn-ghost { color: var(--ink-2); padding-inline: var(--sp-3); }
+.btn-ghost:hover:not(:disabled) { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+.btn-ghost:disabled { color: var(--line); cursor: not-allowed; }
+
+/* 3.2 Inputs, selects, textarea. */
+input[type="text"],
+input[type="url"],
+input[type="number"],
+input[type="search"],
+select,
+textarea {
+  width: 100%;
+  min-height: var(--ctl-h);
+  padding-inline: var(--sp-4);
+  background: var(--surface-2);
+  border: var(--bw-ctl) solid var(--line);
+  border-radius: 0;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--t-title);
+  font-weight: 400;
+  line-height: var(--lh-title);
+  transition: border-color var(--d-press) linear;
+}
+input[type="url"],
+input.is-url { font-family: var(--font-mono); font-size: var(--t-data); }
+textarea { padding-block: var(--sp-3); min-height: calc(var(--ctl-h) * 2); }
+:is(input, select, textarea)::placeholder { color: var(--ink-2); opacity: 1; }
+:is(input, select, textarea):hover:not(:disabled) { border-color: var(--teal-700); }
+:is(input, select, textarea):focus-visible { border-color: var(--teal-300); }
+:is(input, select, textarea):disabled {
+  background: var(--bg);
+  border-color: var(--line-soft);
+  color: var(--ink-2);
+}
+select { padding-inline-end: var(--sp-2); }
+
+/* 3.3 Switch. A square knob in a square track: a hardware slide switch. */
+.switch {
+  /* The positioned ancestor for the visually hidden checkbox below. It lives
+     here, in the shared component, not in a per-view patch. */
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  cursor: pointer;
+  user-select: none;
+  color: var(--ink);
+  font-size: var(--t-body);
+  min-height: var(--tap);
+}
+.switch input {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.switch .track {
+  position: relative;
+  flex: none;
+  width: 46px; height: 24px;
+  background: var(--surface-2);
+  border: var(--bw-ctl) solid var(--line);
+  transition: background-color var(--d-press) linear, border-color var(--d-press) linear;
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 18px; height: 18px;
+  background: var(--line);
+  transition: transform 160ms var(--ease-quart), background-color var(--d-press) linear;
+}
+.switch input:checked + .track { background: var(--teal-900); border-color: var(--teal-300); }
+.switch input:checked + .track::after { background: var(--teal-300); transform: translateX(22px); }
+.switch input:focus-visible + .track { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* 3.4 Chip. The fixed set is VERIFIED, REVIEW, LIVE. Nothing else is a chip. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding-inline: var(--sp-3);
+  font-family: var(--font-ui);
+  font-size: var(--t-chip);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: var(--tr-chip);
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: var(--teal-300);
+}
+.chip.verified { background: var(--teal-300); color: var(--accent-ink); }
+.chip.review   { background: var(--amber);    color: var(--accent-ink); }
+.chip.live     { background: transparent; color: var(--teal-300); border: var(--bw-ctl) solid var(--teal-300); }
+
+/* 3.6 Field label / legend. Never an eyebrow above a heading. */
+.field-label,
+.legend {
+  display: block;
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin-bottom: var(--sp-2);
+}
+
+/* 3.7 Set figure: the scoreboard unit. */
+.scoreboard { display: flex; gap: var(--sp-6); }
+.figure { display: block; }
+.figure b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--t-figure);
+  font-weight: 400;
+  line-height: var(--lh-figure);
+  color: var(--ink);
+}
+.figure.ok b     { color: var(--teal-300); }
+.figure.review b { color: var(--amber); }
+.figure span {
+  display: block;
+  margin-top: var(--sp-2);
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* 3.11 View head. Every view opens with the same three parts. */
+.view-head {
+  display: grid;
+  grid-template-columns: auto minmax(var(--sp-8), 1fr) auto;
+  align-items: center;
+  gap: var(--sp-5);
+}
+.view-head .rule { height: var(--bw-struct); background: var(--rule); }
+.view-head h1 {
+  font-family: var(--font-display);
+  font-size: var(--t-display);
+  font-weight: 400;
+  line-height: var(--lh-display);
+  letter-spacing: -0.005em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.view-sub {
+  margin: var(--sp-4) 0 var(--sp-7);
+  max-width: 62ch;
+  font-size: var(--t-lede);
+  line-height: var(--lh-lede);
+  color: var(--ink-2);
+}
+
+/* Shared notes and errors. Plain, inline, next to the thing that failed. */
+.inline-error {
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--bw-ctl) solid var(--red);
+  background: var(--bg);
+  color: var(--red);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+}
+.center-note {
+  padding-block: var(--sp-8);
+  color: var(--ink-2);
+  font-size: var(--t-lede);
+  line-height: var(--lh-lede);
+}
+
+/* ================================================ 2.4 MOBILE =========== */
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .work { grid-area: 2 / 1; padding: var(--work-top) var(--gutter) var(--sp-7); }
+
+  .rail {
+    grid-area: 1 / 1;
+    border-right: 0;
+    border-bottom: var(--bw-struct) solid var(--teal-700);
+    padding: var(--sp-4) var(--sp-4) 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "crest onair"
+      "nav   nav";
+    align-items: center;
+    column-gap: var(--sp-4);
+  }
+  .brand { grid-area: crest; }
+  .crest { width: 96px; }
+  .strap { display: none; }
+
+  .onair {
+    grid-area: onair;
+    justify-items: end;
+    padding-top: 0;
+  }
+  .onair-source { display: none; }
+
+  .nav {
+    grid-area: nav;
+    flex-direction: row;
+    margin: var(--sp-4) calc(var(--sp-4) * -1) 0;
+  }
+  .nav a {
+    flex: 1;
+    justify-content: center;
+    min-height: 50px;
+    padding-inline: var(--sp-2);
+  }
+  /* The Review count sits inline after the word, not pushed to the tab edge. */
+  .badge { margin-left: 0; }
+
+  .lower-third {
+    margin-left: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "cap   pct"
+      "title pct";
+  }
+  .lt-speed { display: none; }
+
+  /* The Run reorder graft needs #view to be a flex column at this width.
+     Margin collapsing stops inside a flex column, so view rhythm comes from
+     gap or padding, never from a collapsing margin-bottom. */
+  #view { display: flex; flex-direction: column; }
+
+  .view-head {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-4);
+  }
+  .view-head .rule { display: none; }
+}
