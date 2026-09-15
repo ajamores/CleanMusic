@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline-suite:
+    name: Offline test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The real-file tag-writing tests generate 1-second clips with ffmpeg;
+      # without it they skip rather than fail.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - uses: astral-sh/setup-uv@v6
+
+      # Python 3.11: shazamio-core ships no wheel for newer versions (docs/DEVELOPMENT.md).
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen --python 3.11
+
+      # Offline only. Live smoke tests (-m smoke) need network, API keys and a
+      # download toolchain, and stay a manual pre-merge check.
+      - name: Run tests
+        run: uv run pytest
