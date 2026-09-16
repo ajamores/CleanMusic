@@ -24,7 +24,7 @@ const pad2 = (n) => String(Math.max(0, Number(n) || 0)).padStart(2, "0");
 const isVerified = (r) => r.status === "tagged" && !!(r.tags && r.tags.verified);
 
 export async function renderRun(view, ctx) {
-  const { setLamp, setBadge, setState, setSource, nowPlaying, eq } = ctx;
+  const { setLamp, setBadge, setState, setSource, nowPlaying } = ctx;
   let es = null;
   let seen = 0;    // tracks already rendered, so a snapshot refresh doesn't duplicate
   let live = null; // the row for the Track currently downloading, if any
@@ -105,7 +105,7 @@ export async function renderRun(view, ctx) {
 
   // Before the first Source is pasted the stage is empty, and an empty stage
   // left the lower half of the work column bare. It carries the tracklist's
-  // own empty state instead, and, standing on the horizon, the same teaching
+  // own empty state instead, and, standing on the bottom edge, the same teaching
   // block the Review view ends on: static copy, no count and no path the wire
   // has not supplied.
   const LEDGER = [
@@ -274,15 +274,14 @@ export async function renderRun(view, ctx) {
   function renderState(state, { animateTracks = false } = {}) {
     const st = state.state;
 
-    // The rail owns the word, the lamp and the Source line; the horizon owns
-    // the mode. One call each, from the one place that knows the state.
+    // The rail owns the word, the lamp and the Source line. One call each, from
+    // the one place that knows the state.
     view.dataset.runState = st;
     runState = st;
     applyOrder();
     setState(STATE_WORD[st] || st, st);
     setSource(st === "idle" ? "" : (state.url || ""));
     setLamp(st === "running");
-    eq.setMode(st);
     if (st !== "running") { nowPlaying(null); clearLive(); }
 
     const bad = st === "failed" || st === "refused";
@@ -317,8 +316,7 @@ export async function renderRun(view, ctx) {
     es = openRunEvents({
       snapshot: (state) => renderState(state),
       download: (d) => {
-        // The lower third is the progress meter (scaleX, never width) and it
-        // drives the equaliser level for us.
+        // The lower third is the progress meter (scaleX, never width).
         nowPlaying({ title: d.title || "", speed: fmtSpeed(d.speed), percent: clampPct(d.percent) });
         liveTrack(d);
       },
@@ -391,6 +389,5 @@ export async function renderRun(view, ctx) {
     setState("Idle", "idle");
     setSource("");
     nowPlaying(null);
-    eq.setMode("idle");
   };
 }

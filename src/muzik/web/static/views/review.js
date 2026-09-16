@@ -16,10 +16,10 @@ const RULINGS = [
 ];
 
 export async function renderReview(view, ctx) {
-  const { setBadge, eq, nowPlaying, setSource } = ctx;
+  const { setBadge, nowPlaying, setSource } = ctx;
 
   // Every <audio> this view mounts, so a route change or a reload can never
-  // leave one playing into a detached analyser.
+  // leave one playing.
   const players = new Set();
   // "Ruled tonight" is a client-side count of cleared decisions, reset by the
   // mount itself. The wire carries no such number and none is invented.
@@ -58,7 +58,6 @@ export async function renderReview(view, ctx) {
   function silence() {
     for (const a of players) { try { a.pause(); } catch { /* already gone */ } }
     players.clear();
-    eq.detach();
   }
 
   function score(inQueue) {
@@ -197,15 +196,7 @@ export async function renderReview(view, ctx) {
     const audio = item.has_audio
       ? el("audio", { controls: true, preload: "none", src: audioUrl(item.index) })
       : null;
-    if (audio) {
-      players.add(audio);
-      // The horizon follows the real audio while it plays, and only while it
-      // plays: eq.js owns the AudioContext and caches the source node, so
-      // reopening the same item never throws.
-      audio.addEventListener("play", () => ctx.eq.attachAudio(audio));
-      audio.addEventListener("pause", () => ctx.eq.detach());
-      audio.addEventListener("ended", () => ctx.eq.detach());
-    }
+    if (audio) players.add(audio);
 
     // The record column reads tag record then testimony, beside the sleeve
     // rather than under it: full width below the grid stranded the conflict
@@ -216,7 +207,6 @@ export async function renderReview(view, ctx) {
           ? el("img", { class: "ri-cover", src: coverUrl(item.index), alt: "Provisional cover art" })
           : el("div", { class: "ri-cover blank", "aria-hidden": "true" }, "♪"),
         audio ? el("div", { class: "ri-audio" }, audio) : null,
-        audio ? el("p", { class: "ri-audio-note" }, "Press play and the horizon follows the audio.") : null,
       ),
       el("div", { class: "ri-record" },
         item.tags

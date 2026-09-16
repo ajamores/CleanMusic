@@ -145,11 +145,6 @@
 /* The native control, unskinned. It is the one thing here nobody should have
    to learn. */
 .ri-audio audio { width: 100%; display: block; }
-.ri-audio-note {
-  font-size: var(--t-body);
-  line-height: var(--lh-body);
-  color: var(--ink-2);
-}
 
 .ri-tags { background: var(--surface-2); padding: var(--sp-5); }
 .ri-tags dl {

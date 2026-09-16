@@ -3,9 +3,11 @@
 **Direction: Broadcast badge.** A varsity sports-broadcast console. A drenched crest-navy badge rail
 holds the brand at jersey-patch scale down the left of the canvas; the work runs flush left in an
 unbounded column beside it, headed by a block-capital view title, a teal rule across the slack and a
-scoreboard of set figures flush right; a full-width equaliser horizon stands on the bottom edge of
-the shell as the ground the whole interface sits on; and the Track being downloaded is not a card but
-a broadcast lower third pinned across the bottom of the work column.
+scoreboard of set figures flush right; and the Track being downloaded is not a card but a broadcast
+lower third pinned across the bottom of the work column.
+
+The equaliser horizon the mock shows was built and then removed (2026-09-16): it read as clutter.
+Section 6 records the removal; do not bring it back.
 
 This file is the contract. Where it and a mock disagree, this file wins.
 
@@ -20,8 +22,8 @@ Open the winning mock in a browser before writing CSS:
   - `.../concepts/poster/mock.html` (the four-rulings legend, the mobile Run order)
 
 Five corrections to the mock are mandatory and are specified below: (1) Bungee is restricted, (2)
-machine strings move to a mono stack, (3) the horizon is shorter, (4) the shell mounts exactly one
-canvas, (5) the invented QUEUED rows are dropped.
+machine strings move to a mono stack, (3) the horizon is shorter (moot: removed, section 6), (4) the shell mounts exactly one
+canvas (likewise moot), (5) the invented QUEUED rows are dropped.
 
 ---
 
@@ -39,7 +41,7 @@ ink anywhere.
 
 | Token | OKLCH | Hex | Role |
 |---|---|---|---|
-| `--bg` | `oklch(17.5% 0.022 258)` | `#0a111a` | page ground, work column, horizon ground |
+| `--bg` | `oklch(17.5% 0.022 258)` | `#0a111a` | page ground, work column |
 | `--surface` | `oklch(21.5% 0.026 254)` | `#111a25` | plates: tag record, open review row, witness block, appendix |
 | `--surface-2` | `oklch(25.5% 0.028 252)` | `#192430` | inputs, selects, testimony panels, inline decision panels |
 | `--plate-navy` | `oklch(24.0% 0.060 260)` | `#0d1e3b` | the badge rail, the lower third, and the ink colour on teal/amber fills |
@@ -47,12 +49,12 @@ ink anywhere.
 | `--line-soft` | `oklch(28.0% 0.026 250)` | `#1c2733` | 1px row hairlines |
 | `--ink` | `oklch(96.5% 0.008 235)` | `#eff4f8` | all primary text. 17.16:1 on `--bg` |
 | `--ink-2` | `oklch(85.5% 0.016 230)` | `#c5d2d8` | labels, captions, ledes, secondary data. 12.24:1 on `--bg`. A real colour, never `opacity` on `--ink` |
-| `--teal-900` | `oklch(30.0% 0.055 205)` | `#00353b` | cover placeholder ground, deepest bar shadow |
-| `--teal-700` | `oklch(43.0% 0.070 210)` | `#0e5a65` | the crest's sampled teal. Structural rules, rail edge, bar gradient base |
-| `--teal-500` | `oklch(62.0% 0.100 200)` | `#1c989e` | bar gradient mid, hover borders. Decoration and large text only |
-| `--teal-300` | `oklch(79.0% 0.105 196)` | `#5acfd0` | accent ink, primary fill, active nav fill, bar tips, focus ring. 10.23:1 on `--bg`; `--plate-navy` on it 8.90:1 |
+| `--teal-900` | `oklch(30.0% 0.055 205)` | `#00353b` | cover placeholder ground, meter track |
+| `--teal-700` | `oklch(43.0% 0.070 210)` | `#0e5a65` | the crest's sampled teal. Structural rules, rail edge |
+| `--teal-500` | `oklch(62.0% 0.100 200)` | `#1c989e` | hover borders. Decoration and large text only |
+| `--teal-300` | `oklch(79.0% 0.105 196)` | `#5acfd0` | accent ink, primary fill, active nav fill, focus ring. 10.23:1 on `--bg`; `--plate-navy` on it 8.90:1 |
 | `--amber` | `oklch(81.5% 0.140 80)` | `#f2b74a` | review-bound only: queued figure, Review chip, reason lines, review badge. 10.54:1 on `--bg`; `--plate-navy` on it 9.18:1 |
-| `--red` | `oklch(66.5% 0.185 26)` | `#f05b54` | failed and refused only: state word, error lines, terminal bar ramp. 5.71:1 on `--bg` |
+| `--red` | `oklch(66.5% 0.185 26)` | `#f05b54` | failed and refused only: state word, error lines. 5.71:1 on `--bg` |
 
 Semantic aliases (use these in component CSS, not the raw ramp):
 
@@ -149,22 +151,11 @@ Layout dimensions:
 --rail-w:     360px;   /* desktop only */
 --gutter:     48px;    /* work column left/right padding; 20px on mobile */
 --work-top:   40px;    /* work column top padding; 24px on mobile */
---horizon-h:  160px;   /* equaliser canvas height; 64px on mobile */
 --lt-h:       76px;    /* lower third height; 64px on mobile */
 --row-h:      56px;    /* tracklist / review head minimum row height */
 --ctl-h:      52px;    /* input, select and button height; 48px on mobile */
 --tap:        44px;    /* minimum touch target */
 ```
-
-`--horizon-h` is the first token to nudge by eye. At 1440x900 the work column gets 900 minus 160
-(minus 76 more while a run is live). If the Run tracklist feels cramped on the real laptop, take the
-horizon down before touching anything else.
-
-It has already been nudged once on the phone. At 390x844 the masthead and a 92px horizon left a
-548px scrollport, and in Review the decision bar took a further 199px of that, so the Concurrency
-field and the whole idle ledger sat below the fold. The mobile horizon is **64px** and the mobile
-crest **96px**, which returns roughly 55px of scrollport on every phone view without moving a single
-element. Desktop is unchanged at 160px.
 
 ### 1.4 Radii and borders
 
@@ -185,7 +176,6 @@ design.
 Semantic scale, in `tokens.css`. Never write a raw z-index.
 
 ```
---z-eq:       0;   /* the horizon canvas, inside its own grid row */
 --z-content:  1;   /* everything in the work column */
 --z-rail:     10;  /* the badge rail / mobile masthead */
 --z-lower:    20;  /* the lower third */
@@ -205,18 +195,16 @@ wrong turn: Manual and Hint open inline.
 --d-arrive:   220ms;   /* a Track row arriving */
 --d-open:     260ms;   /* review row expand */
 --d-clear:    320ms;   /* a ruled row leaving; matches decide()'s existing timeout */
---d-settle:   700ms;   /* the horizon settling to a terminal silhouette */
 ```
 
-Nothing over 700ms, and only the horizon settle uses that. No page-load choreography: the app loads
+Nothing over 320ms. No page-load choreography: the app loads
 into a task.
 
 ---
 
 ## 2. Shell
 
-Files: `static/index.html`, `static/styles/shell.css`, `static/app.js`, `static/eq.js`,
-`static/styles/eq.css` (Foundation lane only).
+Files: `static/index.html`, `static/styles/shell.css`, `static/app.js` (Foundation lane only).
 
 ### 2.1 Markup
 
@@ -247,15 +235,12 @@ becomes:
 
   <main id="view" class="work"></main>
 
-  <div class="horizon">
-    <canvas id="eq" aria-hidden="true"></canvas>
-    <div class="lower-third" id="now-downloading" hidden>
-      <i class="lt-meter" aria-hidden="true"></i>
-      <span class="lt-cap">Now downloading</span>
-      <span class="lt-title"></span>
-      <span class="lt-speed"></span>
-      <span class="lt-pct"><b>0</b><i>%</i></span>
-    </div>
+  <div class="lower-third" id="now-downloading" hidden>
+    <i class="lt-meter" aria-hidden="true"></i>
+    <span class="lt-cap">Now downloading</span>
+    <span class="lt-title"></span>
+    <span class="lt-speed"></span>
+    <span class="lt-pct"><b>0</b><i>%</i></span>
   </div>
 </div>
 ```
@@ -274,14 +259,10 @@ Desktop (`>= 901px`):
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100dvh;
 }
-.rail    { grid-area: 1 / 1; z-index: var(--z-rail); }
+.rail    { grid-area: 1 / 1 / 3 / 2; z-index: var(--z-rail); }
 .work    { grid-area: 1 / 2; overflow-y: auto; overscroll-behavior: contain;
            padding: var(--work-top) var(--gutter) var(--sp-8); }
-.horizon { grid-area: 2 / 1 / 3 / -1;
-           display: grid; grid-template-rows: var(--horizon-h) auto; }
-#eq      { grid-row: 1; width: 100%; height: 100%; display: block;
-           pointer-events: none; z-index: var(--z-eq); }
-.lower-third { grid-row: 2; z-index: var(--z-lower); }
+.lower-third { grid-area: 2 / 2; z-index: var(--z-lower); }
 ```
 
 The work column is the scroll container, and it is the ONLY scroll container in the app. `body` does
@@ -289,9 +270,8 @@ not scroll (`overflow: hidden` on `html, body`). **No view CSS may set `overflow
 containers**: a view that does will double-scroll the tracklist. If a view needs a scrolling region,
 report it as a finding instead.
 
-Because the horizon is a real grid row and not an overlay, no text is ever drawn over a bar at any
-scroll position. Contrast is therefore a non-question: every string sits on `--bg`, `--surface`,
-`--surface-2` or `--plate-navy`.
+The lower third is a real grid row, not an overlay, so it never covers the work column's text. Every
+string sits on `--bg`, `--surface`, `--surface-2` or `--plate-navy`.
 
 Mobile (`<= 900px`):
 
@@ -300,7 +280,7 @@ Mobile (`<= 900px`):
          grid-template-rows: auto minmax(0, 1fr) auto; }
 .rail    { grid-area: 1 / 1; }
 .work    { grid-area: 2 / 1; padding: var(--work-top) var(--gutter) var(--sp-7); }
-.horizon { grid-area: 3 / 1; }
+.lower-third { grid-area: 3 / 1; }
 ```
 
 ### 2.3 The badge rail (desktop)
@@ -342,8 +322,8 @@ grid-template-columns: auto minmax(0, 1fr);
 
 ### 2.5 The lower third
 
-A `--plate-navy` plate, `--lt-h` tall, spanning the full width of the horizon on mobile and starting
-at the rail edge on desktop (`margin-left: var(--rail-w)`). `hidden` unless a download event has
+A `--plate-navy` plate, `--lt-h` tall, full width on mobile and under the work column only on
+desktop. `hidden` unless a download event has
 arrived, and hidden again on any terminal state.
 
 ```
@@ -377,16 +357,11 @@ new members are shell-owned and view-driven.
   setState(word, state),           // NEW: rail on-air word + `is-<state>` on .onair
   setSource(text),                 // NEW: the mono Source line under the state word ("" clears it)
   nowPlaying(data | null),         // NEW: the lower third. { title, speed, percent } or null to hide
-  eq,                              // NEW: the mountEq handle, see section 6
 }
 ```
 
-`nowPlaying` also calls `eq.setLevel(percent / 100)`, so a view never has to drive both. Views must
-call `nowPlaying(null)` and `setSource("")` from their teardown.
-
-`navigate()` gains one line: `ctx.eq.detach()` before the outgoing teardown, so a Review audio node
-never survives a route change. The rail never re-renders and the horizon never restarts on a route
-change.
+Views must call `nowPlaying(null)` and `setSource("")` from their teardown. The rail never re-renders
+on a route change.
 
 ---
 
@@ -475,13 +450,13 @@ Two forms, both `transform: scaleX()` on a filled bar, `transform-origin: left`,
 - **Inline meter** (`.meter`): 6px tall, `--teal-900` track, `--teal-300` fill, full width of its
   container. Used only where the lower third is not available.
 
-Never animate `width`. Never use a spinner: loading is the state word plus the horizon.
+Never animate `width`. Never use a spinner: loading is the state word plus the lamp.
 
 ### 3.9 Lamp
 
 A 14px square (12px on mobile), no radius, no glow. Colour per state (2.3). While `running` it
 pulses `opacity: 1 -> .35 -> 1` over 1.6s `ease-in-out` infinite. That is the only infinite animation
-in the app besides the horizon, and both stop under reduced motion.
+in the app, and it stops under reduced motion.
 
 ### 3.10 Plate and row
 
@@ -643,8 +618,7 @@ it is started. `run.js` sets `view.dataset.runState = state.state` on every rend
 DOM order and tab order are unchanged, so the QA driver and the mock still fill the form the same
 way. Only the visual order moves, and only while a run is live.
 
-**Equaliser wiring**: `ctx.eq.setMode(state.state)` on every `renderState`, and the download handler
-calls `ctx.nowPlaying({ title, speed, percent })`, which drives `setLevel` for you.
+The download handler calls `ctx.nowPlaying({ title, speed, percent })`.
 
 ### 5.2 Review (`views/review.js` + `styles/review.css`)
 
@@ -672,9 +646,7 @@ An open item takes `background: var(--surface)`.
            padding: var(--sp-5) 0; }
 ```
 
-Left: the cover at 300px square, then the native `<audio controls>` at full column width, then one
-line of `--t-body` `--ink-2`: "Press play and the horizon follows the audio." Do not skin the audio
-element.
+Left: the cover at 300px square, then the native `<audio controls>` at full column width, . Do not skin the audio element.
 
 Right: the tag record on a `--surface` plate, a four-column `dl`:
 
@@ -749,9 +721,6 @@ so the thing you listen to comes before the thing you read. `.sides` stacks with
 The decision bar wraps: Accept full width, Manual and Hint side by side, Skip full width below. Every
 target is at least `--tap`.
 
-**Equaliser wiring**: on the audio element's `play`, `ctx.eq.attachAudio(audioEl)`; on `pause`,
-`ended` and teardown, `ctx.eq.detach()`. Mode stays whatever the Run state left it at.
-
 ### 5.3 Settings (`views/settings.js` + `styles/settings.css`)
 
 **Head.** `SETTINGS` / rule / the current format as a set figure (`M4A` or `MP3 320`) with the legend
@@ -782,92 +751,13 @@ grid, not cards**: it is prose in two columns.
 
 ---
 
-## 6. The equaliser
+## 6. The equaliser (removed)
 
-File: `static/eq.js` plus `static/styles/eq.css` (Foundation lane). One canvas for the whole app,
-mounted at `#eq` inside `.horizon`. **Three canvases is a build failure**: the mock uses one per
-stacked section only so a single full-page screenshot shows every mode at once.
-
-### 6.1 API
-
-```js
-export function mountEq(rootEl) -> {
-  setMode(mode),      // "idle" | "running" | "done" | "refused" | "failed"
-  setLevel(v),        // 0..1, from the download percent; clamped
-  attachAudio(el),    // an <audio> element; bars follow it
-  detach(),           // drop back to synthetic motion
-}
-```
-
-`app.js` calls `mountEq(document.querySelector(".horizon"))` once at boot and puts the handle on the
-context object. Views never mount their own.
-
-### 6.2 Form
-
-A horizon band: full width, standing on the bottom edge of the shell, running under the rail as well
-as the work column so it reads as one continuous ground rather than a widget. It is a layout row, not
-an overlay (section 2.2), so no text is ever over it.
-
-- One `<canvas>`, 2D context, DPR capped at 2, `aria-hidden="true"`, `pointer-events: none`.
-- Height `--horizon-h` (160px desktop, 64px mobile).
-- `mask-image: linear-gradient(to top, #000 68%, transparent 100%)` so bar tips dissolve before they
-  reach the plate edge above.
-- Bars: `floor(width / 15)` clamped to `[24, 96]`. 96 at 1440, 26 at 390. Squared, 3px gaps, no
-  radius, no glow, no blur.
-- Fill: one cached vertical gradient, `--teal-700` at the base through `--teal-500` to `--teal-300`
-  at the tip. Rebuilt only on resize.
-- Peak-hold cap: a 2px `--ink` cap per bar that **holds for 620ms** and then decays 0.006 per frame
-  (graft from the mixing-desk direction: the hold is what makes it read as a VU meter rather than a
-  trail). On terminal red states the cap is `--red`.
-
-### 6.3 Motion model
-
-Per-bar target from three seeded sine terms (each bar gets its own phase, speed and tilt, so the
-field never moves as one wave) multiplied by a horizon profile `0.55 + 0.45 * sin(i / n * PI)` so the
-band is taller in the middle. The drawn value is damped toward the target: 0.34 per frame while
-running, 0.16 idle. `setLevel(v)` maps through `value * (0.45 + 0.85 * v)`.
-
-| Mode | Level | Alpha | Frame gate | Behaviour |
-|---|---|---|---|---|
-| `idle` | 0.18 | 0.60 | 30fps | slow ambient |
-| `running` | `0.45 + 0.4 * percent` | 0.92 | 60fps | livelier and brighter; speed nudges the same level |
-| `done` | settles to 0.18 flat | 0.50 | stops | 700ms `ease-out-expo` settle, then the loop stops |
-| `refused` | settles to 0.14 flat | 0.45 | stops | same settle, red ramp |
-| `failed` | settles to 0.12 flat | 0.45 | stops | same settle, red ramp |
-
-A bad run is visible from across the room without reading a word. That is the point of the terminal
-ramps.
-
-### 6.4 Audio follow
-
-`attachAudio(el)` builds `AudioContext` -> `MediaElementSource(el)` -> `AnalyserNode` (fftSize 128,
-smoothing 0.75) -> `destination`, so the preview still plays through the speakers. Bins map to bars
-on a `pow(i / n, 1.7)` curve so the low end does not eat the band; the value chases with a 0.34 lerp.
-
-**Cache the source node per element in a `WeakMap`.** Calling `createMediaElementSource` twice on the
-same `<audio>` throws, and the Review view opens and closes items repeatedly. `detach()` disconnects
-the analyser and returns to synthetic motion; it does not destroy the cached source.
-
-The AudioContext must be built inside the `play` gesture, not at mount. Any throw, a blocked context,
-or a tainted element falls back silently to synthetic motion. There is no error UI for this.
-
-### 6.5 Performance rules
-
-- `requestAnimationFrame` with a frame-budget gate (33ms idle/terminal, 16ms running).
-- Stop the loop entirely on `document.visibilityState === "hidden"` and on an `IntersectionObserver`
-  miss; restart on return.
-- The loop reads no layout. `clearRect` plus N `fillRect` per frame, nothing else.
-- Resize is the only re-measure, and it is debounced to a frame.
-- No libraries, no offscreen canvas, no worker.
-
-### 6.6 First paint and reduced motion
-
-A seeded silhouette is drawn at mount and at every resize, before the loop takes over, so the band is
-never blank for a frame and a paused canvas is never an empty box.
-
-Under `prefers-reduced-motion: reduce` the loop never starts: the same seeded generator is evaluated
-once at a fixed `t` and painted. Mode changes repaint that silhouette in the new ramp; they do not
-animate it. Two captures a second apart must be byte-identical.
+The mock's equaliser horizon (a full-width canvas band under the shell, driven by run state, download
+percent and Review audio) shipped in #85 and was removed on 2026-09-16 as visual clutter. `eq.js`,
+`eq.css`, the `.horizon` wrapper, the `ctx.eq` handle and the `--horizon-h`, `--z-eq`, `--d-settle`
+and `--red-900` tokens went with it. The work column now runs to the bottom of the viewport, and the
+lower third sits directly in the shell grid.
 
 ---
 
@@ -884,8 +774,7 @@ Only `transform` and `opacity` are animated. Never `width`, `height`, `top` or `
 | Review row open | `grid-template-rows: 0fr -> 1fr`, chevron rotates 90deg | `--d-open` `--ease-quart` |
 | Ruled row clearing | `opacity -> 0`, `translateX(12px)`, row collapse | `--d-clear` (matches `decide()`) |
 | Buttons | background shift; `translateY(1px)` on `:active` | `--d-press` |
-| View change | work column crossfade only | `--d-state`. The rail does not re-render, the horizon does not restart |
-| Horizon settle | terminal ramp | `--d-settle` `--ease-expo` |
+| View change | work column crossfade only | `--d-state`. The rail does not re-render |
 
 Row and Track arrival animations **enhance an already-visible default**. Never gate content
 visibility behind a class-triggered transition: a headless render or a hidden tab would ship a blank
@@ -902,7 +791,7 @@ Reduced motion, one global block in `tokens.css`:
 }
 ```
 
-plus the lamp stops pulsing and the horizon paints its static silhouette (6.6).
+plus the lamp stops pulsing.
 
 ---
 
@@ -960,8 +849,7 @@ plus the lamp stops pulsing and the horizon paints its static silhouette (6.6).
     dot.
 12. Do not animate `width`, `height`, `top` or `left`. Progress is `scaleX`.
 13. Do not set `overflow` on a container inside a view. `.work` is the only scroll container.
-14. Do not mount more than one equaliser canvas, and do not let a route change leak an rAF loop or an
-    AudioContext.
+14. Do not add an equaliser, visualiser or other ambient decoration loop. It was tried and removed.
 15. Do not change `api.js` request shapes, `wire.py`, the routes, the view module signatures, or
     `dev-mock.js` beyond adding fixtures.
 16. Do not render placeholder rows, counts or paths the wire does not supply.
@@ -977,11 +865,11 @@ plus the lamp stops pulsing and the horizon paints its static silhouette (6.6).
 
 | Files | Owner | Sections of this document |
 |---|---|---|
-| `index.html`, `app.js`, `dom.js`, `eq.js`, `styles/tokens.css`, `styles/shell.css`, `styles/eq.css`, `assets/**` | Foundation | 1, 2, 3, 4, 6, 7 |
+| `index.html`, `app.js`, `dom.js`, `styles/tokens.css`, `styles/shell.css`, `assets/**` | Foundation | 1, 2, 3, 4, 7 |
 | `views/run.js`, `styles/run.css` | Run | 5.1 |
 | `views/review.js`, `styles/review.css` | Review | 5.2 |
 | `views/settings.js`, `styles/settings.css` | Settings | 5.3 |
 
 `styles.css` is deleted by Foundation. `index.html` links the split files as separate `<link>`
-elements, in this order: `tokens.css`, `shell.css`, `eq.css`, `run.css`, `review.css`,
+elements, in this order: `tokens.css`, `shell.css`, `run.css`, `review.css`,
 `settings.css`. No `@import`.
