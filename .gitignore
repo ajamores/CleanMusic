@@ -16,3 +16,6 @@ dist/
 
 # Prototype — throwaway code lives on branch prototype/identify-spike, not main
 /prototype/
+
+# Claude working-memory board: personal session notes, kept local
+.claude/hot.md

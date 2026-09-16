@@ -1,0 +1,160 @@
+/* Settings view (DESIGN.md 5.3). View-specific rules only: the head, the
+   buttons, the figure and the error line all come from shell.css.
+   Two stacked format plates, then the pipeline account as prose in two
+   columns. No cards, no grid of steps, no dropdown. */
+
+/* The view sub already spaces the first block; only the gap between
+   blocks is set here, so nothing depends on a collapsing margin (the shell
+   makes #view a flex column at <=900px, where margins do not collapse). */
+.settings-block + .settings-block { margin-top: var(--sp-9); }
+
+/* Section head: the view head's vocabulary one size down, so the rule keeps
+   carrying the eye to the right edge instead of leaving the canvas empty. */
+.block-head {
+  display: grid;
+  grid-template-columns: auto minmax(var(--sp-7), 1fr) auto;
+  align-items: center;
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-5);
+}
+.block-head h2 {
+  font-family: var(--font-display);
+  font-size: var(--t-head2);
+  font-weight: 400;
+  line-height: var(--lh-head2);
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.block-head .rule {
+  /* Thinner than the view head's 3px, so the h1's rule stays the loud one. */
+  height: var(--bw-ctl);
+  background: var(--rule);
+}
+
+/* The "Saved." flash. A status line, not a toast. */
+.settings-saved {
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--teal-300);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------- the format choice --- */
+
+.format-choice { display: grid; gap: var(--sp-3); }
+
+.fmt {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-4);
+  min-height: 96px;
+  padding: var(--sp-5);
+  background: var(--surface);
+  border: var(--bw-ctl) solid transparent;
+  cursor: pointer;
+  transition: background-color var(--d-press) linear,
+              border-color var(--d-press) linear,
+              transform var(--d-press) linear;
+}
+.fmt:hover { border-color: var(--teal-700); }
+.fmt:active { transform: translateY(1px); }
+.fmt.selected { background: var(--surface-2); border-color: var(--teal-300); }
+
+/* The radio stays in the DOM and stays focusable; clip-path hides its own
+   focus ring too, so the ring can be drawn on the whole plate instead. */
+.fmt input {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.fmt:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+@supports not selector(:has(*)) {
+  .fmt input:focus-visible ~ .fmt-box { outline: 3px solid var(--focus); outline-offset: 3px; }
+}
+
+/* The 26px square indicator: a keyline when off, solid teal when on. */
+.fmt-box {
+  grid-area: 1 / 1 / 3 / 2;
+  align-self: center;
+  width: 26px; height: 26px;
+  background: transparent;
+  border: var(--bw-ctl) solid var(--line);
+  transition: background-color var(--d-press) linear, border-color var(--d-press) linear;
+}
+.fmt:hover .fmt-box { border-color: var(--teal-700); }
+.fmt.selected .fmt-box { background: var(--teal-300); border-color: var(--teal-300); }
+
+.fmt-name {
+  grid-area: 1 / 2 / 2 / 3;
+  font-size: var(--t-plate);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--ink);
+}
+.fmt-desc {
+  grid-area: 2 / 2 / 3 / 3;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--ink-2);
+}
+.fmt-state {
+  grid-area: 1 / 3 / 3 / 4;
+  align-self: center;
+  font-size: var(--t-label);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+.fmt.selected .fmt-state { color: var(--teal-300); }
+
+.format-choice + .inline-error { margin-top: var(--sp-4); }
+
+/* --------------------------------------------------- how this works --- */
+
+.how {
+  max-width: 116ch;
+  columns: 2;
+  column-gap: var(--sp-9);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--ink);
+}
+/* A step of the sequence never breaks across the column gutter. */
+.how p { break-inside: avoid; }
+.how p + p { margin-top: var(--sp-5); }
+/* The run-in lead is the step. Ink, so the glossary words stay the teal ones. */
+.how .lead { font-weight: 700; color: var(--ink); }
+.how .g { font-weight: 600; color: var(--teal-300); }
+
+@media (max-width: 900px) {
+  .settings-block + .settings-block { margin-top: var(--sp-7); }
+
+  .block-head { grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-4); }
+  .block-head .rule { display: none; }
+
+  .fmt {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    gap: var(--sp-2) var(--sp-4);
+    min-height: 84px;
+    padding: var(--sp-4);
+  }
+  /* Aligned to the name line, not to the middle of the wrapped desc. */
+  .fmt-box { grid-area: 1 / 1 / 2 / 2; width: 22px; height: 22px; }
+  .fmt-state { grid-area: 1 / 3 / 2 / 4; align-self: center; }
+  .fmt-desc { grid-area: 2 / 2 / 3 / 4; }
+
+  .how { columns: 1; max-width: none; }
+}

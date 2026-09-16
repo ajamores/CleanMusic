@@ -10,6 +10,7 @@ queue, not to failure).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import yt_dlp
@@ -109,10 +110,15 @@ class YtDlpDownloader:
         output_format: OutputFormat = DEFAULT_FORMAT,
         expand_playlist: bool = False,
         playlist_limit: int | None = None,
+        on_event: Callable[[dict], None] | None = None,
     ):
         self._out_dir = Path(out_dir)
         self._cookies = cookies
         self._output_format = output_format
+        #: The seam a non-CLI adapter streams download progress through (ADR-0001
+        #: sibling adapter): fed a small best-effort dict per progress tick from
+        #: the yt-dlp hook. ``None`` (the default) leaves the hook print-only.
+        self._on_event = on_event
         #: Single by default (ADR-0004): a Source names one Track, and an attached
         #: ``list=`` is dropped. ``--playlist`` sets this True for one run to expand
         #: the list; it is never persisted.
@@ -204,10 +210,15 @@ class YtDlpDownloader:
 
     def _announce_download(self, status: dict) -> None:
         """yt-dlp progress hook: print each Track's resolved title once, so a fetch
-        opens with the YouTube title before yt-dlp's own ``[download] …%`` bar."""
+        opens with the YouTube title before yt-dlp's own ``[download] …%`` bar.
+
+        Also forwards each tick to ``on_event`` when an adapter wired one —
+        *every* tick, not just the first per Track: the announcement dedup is a
+        print concern, but a streaming adapter wants the percent moving."""
         if status.get("status") != "downloading":
             return
         info = status.get("info_dict") or {}
+        self._emit_event(status, info)
         video_id = info.get("id")
         # Guard a missing id: a lone id-less entry (None) must not poison the dedup
         # set and mute every later id-less title. Dedup only on a real id; an entry
@@ -217,6 +228,37 @@ class YtDlpDownloader:
         if video_id is not None:
             self._announced.add(video_id)
         print(info.get("title") or video_id or "downloading…")
+
+    def _emit_event(self, status: dict, info: dict) -> None:
+        """Forward one progress tick to the adapter's ``on_event`` callback.
+
+        Fields are best-effort — yt-dlp's status dict varies by stream (no
+        ``total_bytes`` on a live/chunked fetch, so ``percent`` may be None) —
+        plus the same per-entry title the print announcement carries. A callback
+        exception is swallowed: a hook that raises becomes a yt-dlp error, so an
+        adapter bug here would abort the very download it is only observing —
+        the same contract as the manifest post hook (#32).
+        """
+        if self._on_event is None:
+            return
+        downloaded = status.get("downloaded_bytes")
+        total = status.get("total_bytes") or status.get("total_bytes_estimate")
+        try:
+            self._on_event(
+                {
+                    "filename": status.get("filename", ""),
+                    "percent": (
+                        round(downloaded / total * 100, 1)
+                        if downloaded is not None and total
+                        else None
+                    ),
+                    "speed": status.get("speed"),
+                    "title": info.get("title") or info.get("id") or "",
+                }
+            )
+        except Exception:
+            logger.warning("progress on_event callback failed; download continues",
+                           exc_info=True)
 
     def _build_opts(self) -> dict:
         codec = self._output_format.yt_dlp_codec

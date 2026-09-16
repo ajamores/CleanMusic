@@ -12,7 +12,7 @@ touching the others: #3/#4 grow ``_album_waterfall``, #5 fills ``_confidence_gat
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -143,7 +143,11 @@ _DEFAULT_CONCURRENCY = 4
 
 
 def run(
-    source: Source, providers: Providers, *, concurrency: int = _DEFAULT_CONCURRENCY
+    source: Source,
+    providers: Providers,
+    *,
+    concurrency: int = _DEFAULT_CONCURRENCY,
+    on_result: Callable[[Track, TrackResult], None] | None = None,
 ) -> list[TrackResult]:
     """Process a Source end to end, returning one result per downloaded Track.
 
@@ -169,6 +173,13 @@ def run(
     place after the Tracks (safe — a skipped entry never reaches the manifest, so
     an interrupted batch's re-run re-derives it, unlike a finished Track's
     unrepeatable outcome).
+
+    ``on_result`` is the seam a non-CLI adapter streams progress through — the
+    sibling adapter ADR-0001 keeps this engine agnostic of. It is invoked on the
+    drain thread for each ``(track, result)`` the moment that Track's outcome is
+    drained — after its Review enqueue and playlist flush — so an adapter only
+    ever reports an outcome already on disk. ``None`` (the default) changes
+    nothing.
     """
     tracks = providers.downloader.download(source)
     playlist_title = providers.downloader.playlist_title
@@ -181,6 +192,8 @@ def run(
         if result.output_path is not None and result.tags is not None:
             entries.append(_playlist_entry(track, result))
             _flush_playlist(playlist_title, entries, providers)
+        if on_result is not None:
+            on_result(track, result)
     for source_url, reason in providers.downloader.skipped:
         providers.review_queue.enqueue(ReviewItem(source_url=source_url, reason=reason))
     # Final flush even when no Track landed an entry this run: it refreshes a prior
