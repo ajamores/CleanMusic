@@ -1,6 +1,6 @@
-// Shell: hash router, nav state, the rail's on-air block, the lower third and
-// the one equaliser. Views own their own DOM inside #view and nothing else;
-// everything in the rail and the horizon is driven through the context object
+// Shell: hash router, nav state, the rail's on-air block and the lower third.
+// Views own their own DOM inside #view and nothing else; everything in the
+// rail and the lower third is driven through the context object
 // this module hands them (DESIGN.md 2.6).
 //
 // The rail is persistent chrome, so the run state it spells is the SHELL's, not
@@ -12,7 +12,6 @@
 
 import { api, openRunEvents } from "./api.js";
 import { clear } from "./dom.js";
-import { mountEq } from "./eq.js";
 import { renderRun } from "./views/run.js";
 import { renderReview } from "./views/review.js";
 import { renderSettings } from "./views/settings.js";
@@ -52,12 +51,6 @@ let lastDownload = null;
 // is never a second subscriber on the wire and never an idle connection.
 let watch = null;
 
-// One canvas for the whole app, mounted once at boot. Views never mount their
-// own: three rAF loops would cost more than the whole rest of the page.
-// Exported so QA can drive the shell contract without a view in the way; the
-// views themselves always reach it through the context object.
-export const eq = mountEq(document.querySelector(".horizon"));
-
 function currentRoute() {
   const name = (location.hash.replace(/^#\/?/, "") || "run").split("/")[0];
   return routes[name] ? name : "run";
@@ -70,9 +63,6 @@ async function navigate() {
     if (a.dataset.route === name) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  // A Review audio node must never survive a route change, so the analyser is
-  // dropped before the outgoing view is torn down.
-  eq.detach();
   closeWatch();
   // Carry the rail's reading across the teardown: a view's teardown resets the
   // shell's state (it cannot know whether the run outlives it), and the truth
@@ -87,7 +77,7 @@ async function navigate() {
   view.classList.remove("view-enter");
   void view.offsetWidth;
   view.classList.add("view-enter");
-  const t = await routes[name](view, { setBadge, setLamp, setState, setSource, nowPlaying, eq });
+  const t = await routes[name](view, { setBadge, setLamp, setState, setSource, nowPlaying });
   if (my !== gen) {
     // A newer navigate() has already rendered and owns the page. This render
     // lost, so it tears itself down immediately instead of becoming the
@@ -128,15 +118,13 @@ export function setSource(text) {
   rail.source = text || "";
 }
 
-// The lower third. It also drives the equaliser level, so a view never has to
-// keep the two in step by hand.
+// The lower third.
 export function nowPlaying(data) {
   const plate = document.getElementById("now-downloading");
   lastDownload = data || null;
   if (!data) {
     plate.hidden = true;
     plate.querySelector(".lt-meter").style.transform = "scaleX(0)";
-    eq.setLevel(0);
     return;
   }
   const pct = Math.max(0, Math.min(100, Number(data.percent) || 0));
@@ -148,7 +136,6 @@ export function nowPlaying(data) {
   plate.querySelector(".lt-pct b").textContent = String(Math.round(pct));
   // scaleX, never width: an animated width is a layout every frame.
   plate.querySelector(".lt-meter").style.transform = `scaleX(${pct / 100})`;
-  eq.setLevel(pct / 100);
 }
 
 // ---- the shell's run state -------------------------------------------------
@@ -168,7 +155,6 @@ function restoreRail(carried) {
   setState(carried.word, carried.state);
   setSource(carried.source);
   setLamp(carried.state === "running");
-  eq.setMode(carried.state);
   nowPlaying(carried.download);
 }
 
@@ -178,7 +164,6 @@ function applyRun(state) {
   setState(STATE_WORD[st], st);
   setSource(st === "idle" ? "" : (state.url || ""));
   setLamp(st === "running");
-  eq.setMode(st);
   if (st !== "running") nowPlaying(null);
 }
 
@@ -196,8 +181,8 @@ function openWatch(my) {
     },
     state: async ({ state }) => {
       if (state === "running") return;
-      // Terminal "state" events carry only the word; the Source line and the
-      // settled horizon come from re-reading the full current state.
+      // Terminal "state" events carry only the word; the Source line comes
+      // from re-reading the full current state.
       closeWatch();
       let full = null;
       try { full = await api.currentRun(); } catch { /* the word is enough */ }

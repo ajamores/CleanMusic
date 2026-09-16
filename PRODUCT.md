@@ -25,8 +25,8 @@ Source, watch it work, clear a queue. Familiarity is a feature; strangeness with
 failure mode. Density is allowed and often correct.
 
 The one place the register bends: the brand is assertive on purpose. The crest is large and always
-on screen, and the equaliser carries state as flavour. That is a deliberate, bounded exception, and
-it never reaches into form controls, data values or labels.
+on screen. That is a deliberate, bounded exception, and it never reaches into form controls, data
+values or labels.
 
 ## Theme
 
@@ -52,7 +52,7 @@ Dry, understated, plain. Sentence case. No exclamation marks. No em dashes or en
 - Every server- or user-provided string goes through `textContent`, never `innerHTML`.
 - The page must render with no network: fonts are self-hosted woff2 in `static/assets/fonts/`.
 - 390px is a first-class layout, not a fallback.
-- The tool is fast and must feel instant. The equaliser must not cost it.
+- The tool is fast and must feel instant.
 
 ## Design system
 

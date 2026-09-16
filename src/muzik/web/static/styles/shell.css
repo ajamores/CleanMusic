@@ -23,16 +23,14 @@
   /* No bottom fade. A mask here rendered the last 24px of live functional text
      at falling opacity on every view (the LIVE run row, the last line of prose,
      the whole rulings block), which is exactly the thing this design bans. The
-     horizon's 3px teal rule (eq.css) is the scroll edge: harder and more
-     legible than a dissolve. The --sp-8 / --sp-7 bottom padding clears it. */
+     viewport edge (or the lower third's teal rule) is the scroll edge. */
   /* The native scrollbar, told which ink to use. Not a skinned one: no
      ::-webkit- pseudo-element, the platform still draws and sizes the widget. */
   scrollbar-width: thin;
   scrollbar-color: var(--teal-700) var(--bg);
 }
 
-/* Route change: the work column crossfades, the rail does not re-render and
-   the horizon does not restart. Content is visible by default; the animation
+/* Route change: the work column crossfades and the rail does not re-render. Content is visible by default; the animation
    only enhances it. */
 .work.view-enter { animation: view-enter var(--d-state) linear; }
 @keyframes view-enter { from { opacity: 0; } }
@@ -40,7 +38,7 @@
 /* ==================================================== 2.3 THE RAIL ===== */
 
 .rail {
-  grid-area: 1 / 1;
+  grid-area: 1 / 1 / 3 / 2;
   z-index: var(--z-rail);
   background: var(--plate-navy);
   border-right: var(--bw-struct) solid var(--teal-700);
@@ -175,10 +173,9 @@
 /* ================================================ 2.5 LOWER THIRD ====== */
 
 .lower-third {
-  grid-row: 2;
+  grid-area: 2 / 2;
   position: relative;
   z-index: var(--z-lower);
-  margin-left: var(--rail-w);
   min-height: var(--lt-h);
   background: var(--plate-navy);
   border-top: var(--bw-struct) solid var(--teal-700);
@@ -517,7 +514,7 @@ select { padding-inline-end: var(--sp-2); }
   .badge { margin-left: 0; }
 
   .lower-third {
-    margin-left: 0;
+    grid-area: 3 / 1;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "cap   pct"

@@ -50,7 +50,6 @@
   --teal-300:   oklch(79.0% 0.105 196);  /* #5acfd0 accent ink and fill, 10.23:1 on --bg */
   --amber:      oklch(81.5% 0.140 80);   /* #f2b74a review-bound only, 10.54:1 on --bg */
   --red:        oklch(66.5% 0.185 26);   /* #f05b54 failed and refused only, 5.71:1 on --bg */
-  --red-900:    oklch(30.0% 0.090 26);   /* #4a1512 the horizon's terminal ramp base. Decoration only: never text, never a ground behind text */
 
   --accent:      var(--teal-300);
   --accent-ink:  var(--plate-navy);      /* text that sits ON teal-300 or amber */
@@ -90,11 +89,10 @@
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
   --sp-6: 32px; --sp-7: 40px; --sp-8: 48px; --sp-9: 64px; --sp-10: 88px;
 
-  /* Layout. --horizon-h is the first token to nudge by eye. */
+  /* Layout. */
   --rail-w:    360px;
   --gutter:    48px;
   --work-top:  40px;
-  --horizon-h: 160px;
   --lt-h:      76px;
   --row-h:     56px;
   --ctl-h:     52px;
@@ -107,7 +105,6 @@
   --bw-struct: 3px;
 
   /* -------------------------------------------------------- z-index --- */
-  --z-eq:      0;
   --z-content: 1;
   --z-rail:    10;
   --z-lower:   20;
@@ -120,7 +117,6 @@
   --d-arrive:  220ms;
   --d-open:    260ms;
   --d-clear:   320ms;
-  --d-settle:  700ms;
 }
 
 @media (max-width: 900px) {
@@ -142,7 +138,6 @@
 
     --gutter:    20px;
     --work-top:  24px;
-    --horizon-h: 64px;
     --lt-h:      64px;
     --ctl-h:     48px;
   }

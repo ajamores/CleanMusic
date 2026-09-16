@@ -149,7 +149,7 @@
 
 /* The first screen the tool ever shows. An empty stage used to end the view
    halfway up the work column; the tracklist's own empty state now says so in
-   words, and the ledger stands on the horizon so the slack between them is
+   words, and the ledger stands on the bottom edge so the slack between them is
    composition rather than an accident. */
 .run-idle { margin-top: var(--sp-8); }
 
@@ -197,7 +197,7 @@
 .run-idle .list-head { margin-bottom: 0; }
 
 /* The work column has a fixed height, so the idle block can take the slack and
-   set the ledger down on the horizon. Keyed on .run-view, which run.js puts on
+   set the ledger down on the bottom edge. Keyed on .run-view, which run.js puts on
    the view element and takes off again in its teardown, so nothing here can
    reach another view. The bare #view in the first two selectors is specificity,
    not ownership: the shell declares the work column's flex contract on #view
