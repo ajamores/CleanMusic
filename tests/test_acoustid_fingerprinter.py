@@ -91,3 +91,35 @@ def test_a_candidate_without_a_recording_id_still_identifies():
     assert match is not None
     assert match.title == "Song"
     assert match.recording_mbid is None
+
+
+def test_a_top_score_tie_carries_every_tied_candidate_not_just_the_first_listed():
+    # #87: the same fingerprint linked to two recordings at an identical score — a
+    # crowd-sourced mislink listed first. A tie is an ambiguity, not a ranking, so the
+    # Match carries the other tied candidate for the engine to weigh.
+    fp = _fp(
+        candidates=[
+            (0.9787711, "rec-junk", "Track 10", "Stephen King"),
+            (0.9787711, "rec-right", "You’ve Changed", "Keyshia Cole"),
+            (0.7, "rec-lower", "Also Ran", "Someone"),
+        ]
+    )
+    match = fp.identify(_TRACK)
+    assert match is not None
+    identities = {(m.title, m.artist, m.recording_mbid) for m in (match, *match.tied)}
+    assert identities == {
+        ("Track 10", "Stephen King", "rec-junk"),
+        ("You’ve Changed", "Keyshia Cole", "rec-right"),
+    }
+    assert all(t.tied == () for t in match.tied)
+
+
+def test_a_clear_winner_carries_no_ties():
+    fp = _fp(
+        candidates=[
+            (0.9, "rec-high", "Right Take", "The Artist"),
+            (0.6, "rec-low", "Wrong Take", "Someone"),
+        ]
+    )
+    match = fp.identify(_TRACK)
+    assert match is not None and match.tied == ()
