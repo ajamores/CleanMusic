@@ -69,6 +69,12 @@ class Match:
     #: the adapter making its own lookup. None when the identifier gives no id.
     recording_mbid: str | None = None
     confidence: float = 0.0
+    #: Other recordings the identifier scored *identically* to this one (#87) — an
+    #: ambiguity it could not rank, e.g. one AcoustID fingerprint linked to two
+    #: MusicBrainz recordings, one a crowd-sourced mislink. Which candidate sits at
+    #: the top is response order, not evidence; the engine resolves the tie against
+    #: an independent witness. Empty when the identifier had a clear winner.
+    tied: tuple[Match, ...] = ()
 
 
 @dataclass(frozen=True)

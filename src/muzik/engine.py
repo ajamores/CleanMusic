@@ -304,7 +304,28 @@ def _rescue_or_review(track: Track, providers: Providers) -> TrackResult:
     rescued = providers.acoustid.identify(track)
     if rescued is None:
         return _best_effort_review(track, "no fingerprint match", providers)
-    return _tag_matched(track, rescued, providers, second_source=None)
+    settled = _settle_rescue_tie(track, rescued)
+    if settled is None:
+        reason = "ambiguous fingerprint match: tied recordings the Source can't separate"
+        return _best_effort_review(track, reason, providers)
+    return _tag_matched(track, settled, providers, second_source=None)
+
+
+def _settle_rescue_tie(track: Track, rescued: Match) -> Match | None:
+    """The rescued identity with any AcoustID top-score tie resolved, or ``None`` (#87).
+
+    With Shazam silent there is no primary Match to break a tie, so only the Source
+    may: a tie between copies of one recording is no ambiguity; otherwise the tied
+    candidate whose title the Source echoes is the identity, gated as usual. When
+    the Source backs none — or backs more than one — nothing is picked: response
+    order is not evidence, so the Track goes to Review.
+    """
+    if all(_same_identity(candidate, rescued) for candidate in rescued.tied):
+        return replace(rescued, tied=())
+    backed = [c for c in (rescued, *rescued.tied) if _agrees(c, track.source_title)]
+    if backed and all(_same_identity(c, backed[0]) for c in backed[1:]):
+        return replace(backed[0], tied=())
+    return None
 
 
 def _tag_matched(
@@ -638,6 +659,38 @@ def _artist_corroborates(match: Match, witness_tokens: set[str]) -> bool:
     return artist_tokens <= witness_tokens
 
 
+def _same_identity(candidate: Match, reference: Match) -> bool:
+    """True when ``candidate`` and ``reference`` name the same recording.
+
+    The gate's own agreement rules — title echoed, artist backed — applied in *both*
+    directions: against a Source a subset is agreement, but between two recordings
+    "Love" is not "Love Song" (#87).
+    """
+    return _echoes(candidate, reference) and _echoes(reference, candidate)
+
+
+def _echoes(match: Match, other: Match) -> bool:
+    """True when ``other`` backs ``match`` on title and artist, as a Source title would."""
+    return _agrees(match, other.title) and _artist_corroborates(
+        match, _identity_tokens(other.artist)
+    )
+
+
+def _break_tie_toward(primary: Match, second: Match) -> Match:
+    """The second opinion to witness, with an AcoustID top-score tie resolved (#87).
+
+    A tie is an ambiguity, not a ranking: the tied recordings are indistinguishable
+    to the fingerprint, and which sits first is response order. So when *any* tied
+    candidate agrees with the primary Match, that one is the second opinion —
+    acoustic agreement, not a mislink that happened to be listed first. When none
+    agrees the second opinion stands as it came: a genuine disagreement.
+    """
+    for candidate in (second, *second.tied):
+        if _same_identity(candidate, primary):
+            return replace(candidate, tied=())
+    return second
+
+
 #: YouTube's auto-generated artist channels ("Rick Astley - Topic") and label
 #: channels ("RickAstleyVEVO") dress the artist name; strip the dressing so the
 #: bare artist is left ("Rick Astley").
@@ -713,6 +766,8 @@ def _confidence_gate(
     # written verified — never the possibly-reversed Source parse.
     if title_agrees:
         second = second_source.identify(track) if second_source is not None else None
+        if second is not None:
+            second = _break_tie_toward(match, second)
         ruling = _identity_ruling(track, match, second, resolver)
         if ruling.verdict == "consistent":
             return replace(tags, verified=True), None, None

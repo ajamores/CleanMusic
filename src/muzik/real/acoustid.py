@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 
 from muzik.domain import Match, Track
 
@@ -58,6 +59,9 @@ class AcoustIdFingerprinter:
     def identify(self, track: Track) -> Match | None:
         """The best AcoustID candidate as a Match, or ``None`` on a miss.
 
+        On a top-score tie the Match carries the other tied candidates on ``tied``
+        (#87); the engine, which owns identity agreement, resolves which one to trust.
+
         ``None`` — not a raise — for a missing key, a missing ``fpcalc`` backend, a
         fingerprint or network error, or no candidate scoring above the floor. The
         witness then simply has no second opinion, and the batch runs on.
@@ -65,34 +69,45 @@ class AcoustIdFingerprinter:
         if not self._api_key:
             return None
         try:
-            best = self._best_candidate(str(track.audio_path))
+            top = self._top_candidates(str(track.audio_path))
         except Exception:
             return None  # missing fpcalc, unreadable audio, network — a miss, not a raise
-        if best is None:
+        if not top:
             return None
-        _score, recording_id, title, artist = best
-        return Match(
-            title=title or "",
-            artist=artist or "",
-            album="",  # AcoustID names no album; the album waterfall fills it (#45)
-            recording_mbid=recording_id,  # → the waterfall's MusicBrainz tier, primary only
-            confidence=1.0,
-        )
+        first, *others = (_to_match(candidate) for candidate in top)
+        return replace(first, tied=tuple(others))
 
-    def _best_candidate(self, audio_path: str) -> _Candidate | None:
-        """The highest-scoring candidate that clears the floor and carries a title.
+    def _top_candidates(self, audio_path: str) -> list[_Candidate]:
+        """Every candidate sharing the top score that clears the floor and carries a title.
 
-        ``acoustid.match`` already yields candidates best-score-first, but this picks
+        ``acoustid.match`` already yields candidates best-score-first, but this finds
         the max explicitly so an unsorted injected ``match_fn`` behaves too. A
         candidate with no title is skipped — there would be nothing to tag or witness.
+        More than one comes back on a tie (#87): AcoustID can't tell those recordings
+        apart, so the adapter reports them all rather than let response order pick.
         """
-        best: _Candidate | None = None
+        top: list[_Candidate] = []
         for score, recording_id, title, artist in self._match_fn(self._api_key, audio_path):
             if score is None or score < _MIN_SCORE or not title:
                 continue
-            if best is None or score > (best[0] or 0.0):
-                best = (score, recording_id, title, artist)
-        return best
+            candidate = (score, recording_id, title, artist)
+            if not top or score > (top[0][0] or 0.0):
+                top = [candidate]
+            elif score == top[0][0]:
+                top.append(candidate)
+        return top
+
+
+def _to_match(candidate: _Candidate) -> Match:
+    """One AcoustID candidate as a Match — identity and recording id, nothing more."""
+    _score, recording_id, title, artist = candidate
+    return Match(
+        title=title or "",
+        artist=artist or "",
+        album="",  # AcoustID names no album; the album waterfall fills it (#45)
+        recording_mbid=recording_id,  # → the waterfall's MusicBrainz tier, primary only
+        confidence=1.0,
+    )
 
 
 def _acoustid_match(api_key: str, audio_path: str) -> Iterable[_Candidate]:

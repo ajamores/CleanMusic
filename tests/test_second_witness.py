@@ -2,17 +2,20 @@
 
 AcoustID is a second, independent acoustic source fed to the ADR-0006 identity
 witness — never a blind fallback. These drive the engine with a fake Shazam, a fake
-AcoustID, and a fake Resolver, and assert the four behaviours the ticket names:
+AcoustID, and a fake Resolver, and assert the behaviours its tickets name (#51, #87):
 
   * Shazam miss + AcoustID hit  — coverage rescue, then witnessed like any identity.
   * Both hit, agree             — the witness sees both acoustic claims.
   * Both hit, disagree          — the witness governs; a dissent routes to Review.
   * Both miss                   — Review; nothing is invented.
+  * AcoustID top-score tie (#87) — a tied candidate agreeing with Shazam is the
+    second opinion; on a rescue, only the Source may settle the tie, else Review.
 
 plus the cost discipline (#38): the corroborated fast path and the contradicted
 path consult neither the witness nor AcoustID.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 from muzik.domain import Match, Source
@@ -266,6 +269,159 @@ def test_both_hit_but_disagree_and_the_witness_dissents_routes_to_review():
     assert result.reason is not None
     assert resolver.witness_calls == [shazam]
     assert resolver.witness_second_opinions == [acoustid_match]
+
+
+# --- AcoustID top-score tie (#87) ---------------------------------------------
+
+#: One fingerprint, two MusicBrainz recordings at an identical score — the observed
+#: `32jRn87z3ts` case: a crowd-sourced mislink listed first, the right recording tied.
+_MISLINK = Match(title="Track 10", artist="Stephen King", album="", confidence=1.0)
+_RIGHT = Match(title="You’ve Changed", artist="Keyshia Cole", album="", confidence=1.0)
+
+
+def test_a_tied_acoustid_candidate_that_agrees_with_shazam_is_the_second_opinion():
+    # The tie is an ambiguity, not a disagreement: one tied recording agrees with
+    # Shazam, so the witness is shown acoustic agreement — not the mislink that
+    # happened to be listed first — and the Track verifies.
+    shazam = Match(title="You've Changed", artist="Keyshia Cole", album="", confidence=1.0)
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/32jRn87z3ts"),
+        _providers(
+            shazam=shazam,
+            acoustid=FakeFingerprinter(match=replace(_MISLINK, tied=(_RIGHT,))),
+            resolver=resolver,
+            source_title="You've Changed",
+            uploader="Keyshia Cole",
+            writer=writer,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is True
+    assert resolver.witness_calls == [shazam]
+    assert resolver.witness_second_opinions == [_RIGHT]
+
+
+def test_a_tie_where_no_candidate_agrees_with_shazam_is_still_a_disagreement():
+    shazam = Match(title="You've Changed", artist="Keyshia Cole", album="", confidence=1.0)
+    other = Match(title="Other Song", artist="Other Artist", album="", confidence=1.0)
+    second = replace(_MISLINK, tied=(other,))
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="inconsistent")
+    results = run(
+        Source(url="https://youtu.be/tie-disagree"),
+        _providers(
+            shazam=shazam,
+            acoustid=FakeFingerprinter(match=second),
+            resolver=resolver,
+            source_title="You've Changed",
+            uploader="Keyshia Cole",
+            writer=writer,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is False
+    assert resolver.witness_second_opinions == [second]  # today's disagreement, unchanged
+
+
+def test_a_rescue_tie_the_source_cannot_separate_goes_to_review_without_a_pick():
+    # Shazam missed, so no primary Match breaks the tie, and the Source title backs
+    # neither tied recording. Picking one would be response order dressed as an
+    # identity: the Track stays provisional and goes to Review, and no witness is
+    # asked to rule on an arbitrary pick.
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")  # would verify the pick if asked
+    results = run(
+        Source(url="https://youtu.be/rescue-tie"),
+        _providers(
+            shazam=None,
+            acoustid=FakeFingerprinter(match=replace(_MISLINK, tied=(_RIGHT,))),
+            resolver=resolver,
+            source_title="Untitled upload",
+            uploader="",
+            writer=writer,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is False
+    assert result.reason is not None and "tied" in result.reason
+    assert result.tags.title not in {"Track 10", "You’ve Changed"}
+    assert resolver.witness_calls == []
+
+
+def test_a_rescue_tie_is_settled_by_the_source_title_backing_one_candidate():
+    # Shazam missed; the Source title names one of the tied recordings. That is
+    # evidence, not response order — the backed candidate becomes the identity and is
+    # gated like any rescue (here the uploader-only artist sends it to the witness).
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/32jRn87z3ts"),
+        _providers(
+            shazam=None,
+            acoustid=FakeFingerprinter(match=replace(_MISLINK, tied=(_RIGHT,))),
+            resolver=resolver,
+            source_title="You've Changed",
+            uploader="Keyshia Cole",
+            writer=writer,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is True
+    assert (result.tags.title, result.tags.artist) == ("You’ve Changed", "Keyshia Cole")
+    assert resolver.witness_calls == [_RIGHT]
+
+
+def test_a_rescue_tie_between_copies_of_one_recording_is_no_ambiguity():
+    # The same song linked twice (an album and a compilation release): the tied
+    # candidates agree on identity, so there is nothing to disambiguate.
+    album_copy = Match(title="Trouble Man", artist="Marvin Gaye", album="", recording_mbid="rec-a")
+    compilation_copy = replace(album_copy, recording_mbid="rec-b")
+    writer = FakeTagWriter()
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/rescue-copies"),
+        _providers(
+            shazam=None,
+            acoustid=FakeFingerprinter(match=replace(album_copy, tied=(compilation_copy,))),
+            resolver=resolver,
+            source_title="Untitled upload",
+            uploader="Marvin Gaye",
+            writer=writer,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.title == "Trouble Man"
+    assert result.reason is None or "tied" not in result.reason
+
+
+def test_a_rescue_tie_between_a_title_and_its_prefix_is_still_ambiguous():
+    # "Love" is not a copy of "Love Song" just because its words are a subset: two
+    # distinct recordings, so the tie stays unpicked when the Source can't separate.
+    love_song = Match(title="Love Song", artist="Adele", album="", confidence=1.0)
+    love = Match(title="Love", artist="Adele", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/rescue-prefix"),
+        _providers(
+            shazam=None,
+            acoustid=FakeFingerprinter(match=replace(love_song, tied=(love,))),
+            resolver=resolver,
+            source_title="Untitled upload",
+            uploader="Adele",
+            writer=FakeTagWriter(),
+        ),
+    )
+
+    result = results[0]
+    assert result.reason is not None and "tied" in result.reason
+    assert resolver.witness_calls == []
 
 
 # --- Cost discipline (#38): the second source stays off the cheap paths -------
