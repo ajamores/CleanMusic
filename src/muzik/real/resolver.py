@@ -89,7 +89,9 @@ class HaikuResolver:
         the thumbnail when one is available. ``second`` is an optional second,
         independent acoustic identification (AcoustID, #51) weighed as evidence:
         two acoustic sources agreeing is stronger than the video's own title/channel,
-        and their disagreement is a signal in itself. Any failure or timeout degrades
+        and a credible disagreement is a signal in itself. The verdict always judges
+        ``match``, never ``second``; a second opinion that is no credible song
+        identification at all weighs nothing (#88). Any failure or timeout degrades
         to ``unsure`` so the batch never blocks (ADR-0002).
         """
         try:
@@ -127,13 +129,24 @@ class HaikuResolver:
                 "that evidence — i.e. the video really is that artist's recording of "
                 "that song, not a different song, a cover, or an impersonator "
                 "channel dressed in the artist's name. "
+                "Your verdict is ALWAYS about the PRIMARY fingerprint identification "
+                "and nothing else. "
                 "You may also be given a SECOND, independent acoustic identification "
-                "from a different fingerprint service. Two acoustic sources are "
-                "evidence about what the audio actually is — stronger than the "
-                "video's own title or channel, which anyone can type. When both "
-                "acoustic sources agree, that strongly supports 'consistent'. When "
-                "they disagree, judge which (if either) the video's evidence "
-                "supports; if neither clearly fits, or you cannot tell, answer "
+                "from a different fingerprint service. It is evidence, never the "
+                "subject of your verdict. Two acoustic sources are evidence about "
+                "what the audio actually is — stronger than the video's own title "
+                "or channel, which anyone can type. When both acoustic sources "
+                "agree, that strongly supports 'consistent'. When they disagree, "
+                "first rule on the second opinion's standing. It is 'unreliable' "
+                "ONLY when it is not a credible song identification at all — a "
+                "placeholder or generic track name (e.g. 'Track 10'), an author or "
+                "other non-musician, spoken word — a failed witness that weighs "
+                "nothing, never evidence against the primary; then judge the "
+                "primary as if no second opinion were given. Any credible "
+                "alternative (the same song by another artist, a cover, a "
+                "different real song) 'disagrees': the video's title, channel and "
+                "description cannot overrule it, because an impersonator types "
+                "exactly those, so the primary is not confirmed — answer "
                 "'inconsistent' or 'unsure' so a human reviews it. "
                 "Know YouTube's auto-generated upload format (#73): a description "
                 "beginning 'Provided to YouTube by <label>' then lists "
@@ -148,8 +161,12 @@ class HaikuResolver:
                 "a competing claim about which song this is; the song's own "
                 "identity lives in the video title and the '<Song> · <Artist>' "
                 "line. "
-                'Reply with ONLY JSON {"verdict": "consistent"|"inconsistent"|'
-                '"unsure", "rationale": str}. Use "unsure" when the evidence is too '
+                'Reply with ONLY JSON {"second_opinion": "none"|"agrees"|'
+                '"disagrees"|"unreliable", "verdict": "consistent"|"inconsistent"|'
+                '"unsure", "rationale": str}, keys in that order. second_opinion is '
+                '"none" when no second identification was given. The verdict and '
+                "the rationale both judge the PRIMARY identification, and must "
+                'agree with each other. Use "unsure" when the evidence is too '
                 "thin to tell. Keep the rationale to one short sentence."
             ),
             messages=[{"role": "user", "content": content}],
@@ -174,14 +191,14 @@ def _witness_prompt(track: Track, match: Match, second: Match | None = None) -> 
     if len(description) > _DESCRIPTION_LIMIT:
         description = description[:_DESCRIPTION_LIMIT] + "…"
     second_block = (
-        "Second acoustic identification (an independent fingerprinter):\n"
+        "Second acoustic identification (an independent fingerprinter; evidence only):\n"
         f"  artist: {second.artist}\n"
         f"  song:   {second.title}\n\n"
         if second is not None
         else ""
     )
     return (
-        "Fingerprint identification:\n"
+        "Primary fingerprint identification (the subject of your verdict):\n"
         f"  artist: {match.artist}\n"
         f"  song:   {match.title}\n\n"
         f"{second_block}"
@@ -190,7 +207,7 @@ def _witness_prompt(track: Track, match: Match, second: Match | None = None) -> 
         f"  channel:     {track.uploader}\n"
         f"  tags:        {tags}\n"
         f"  description: {description or '(none)'}\n\n"
-        "Is the fingerprint identification consistent with this video?"
+        "Is the PRIMARY fingerprint identification consistent with this video?"
     )
 
 

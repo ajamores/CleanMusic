@@ -64,3 +64,14 @@ AcoustID can link one fingerprint to several MusicBrainz recordings at an *ident
 
 - **Both hit, tie** — when any tied candidate names the same recording as Shazam (title and artist, compared both ways), that candidate is the second opinion the witness sees. When none does, the tie stands as today's disagreement.
 - **Shazam miss, tie** — with no primary to break it, only the Source can: copies of one recording are no ambiguity, and a tie whose title the Source echoes for exactly one recording settles to it (then gated and witnessed as any rescue). Otherwise the Track goes to best-effort **Review without a witness call** — a narrowing of the #51 rescue bullet above: the witness is not asked to adjudicate an identity nothing but response order chose.
+
+## Amendment (#88): the verdict judges the primary identification only
+
+With a junk second opinion in play (the #87 mislink, "Stephen King — Track 10", on `32jRn87z3ts`), the witness wrote a rationale backing the Shazam Match and then returned `inconsistent` — scoring the *second* identification. The gate reads only the verdict, so a correct Match went to Review (reproduced live 2/5). The prompt never said what the verdict was about once two acoustic claims were present. It now does:
+
+- **The verdict's subject is the primary identification.** The second opinion is evidence, never the subject; the prompt labels them so.
+- **A second opinion that is no credible song identification is a failed witness.** A placeholder title ("Track 10"), an author or other non-musician, spoken word: it weighs nothing — not evidence *against* the primary, which is then judged as if no second opinion were given. This narrows the #51 **Both hit, disagree** bullet for that case only.
+- **Any credible dissent still holds the primary back.** The same song by another artist, a cover, a different real song: the video's title, channel and description cannot overrule it, because an impersonator types exactly those. The #51 bullet stands here — the #16 shape still reaches Review, now even when the metadata looks official (a `…VEVO` channel is typeable too). An earlier draft let the video's metadata mark any contradicted second opinion unreliable; live, that verified the impersonator 1/6 where the old prompt caught it 6/6, so it was narrowed.
+- **The reply rules on the second opinion first** (`second_opinion`: `none` / `agrees` / `disagrees` / `unreliable`, before `verdict`), so the verdict can't drift onto it. The field fixes the subject; it is not yet carried onto the ruling — surfacing it on the Review card, and the verdict/rationale mismatch the card can show, is #75.
+
+Verdict vocabulary and the gate are unchanged. Confirmed live, 6 runs each: the #88 Track rules `consistent` 6/6 with the junk second opinion forced; thin-evidence genuine disagreements, an official-looking upload with a credible dissent, and the #16 impersonator shape all rule `inconsistent`/`unsure` 6/6.

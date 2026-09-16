@@ -171,3 +171,34 @@ def test_witness_withholds_the_thumbnail_on_an_auto_generated_upload(monkeypatch
     )
     HaikuResolver(client=client).witness_identity(organic, _MATCH)
     assert fetches == ["https://img/frame.jpg"]  # organic uploads keep the image
+
+
+def test_witness_verdict_is_pinned_to_the_primary_identification():
+    # #88, observed live: with a junk second opinion (AcoustID's "Stephen King —
+    # Track 10") the witness's rationale backed the Shazam Match but its verdict
+    # scored the *second* identification, sinking a correct Match. The prompt must
+    # say what the verdict is about: the primary identification, never the second.
+    second = Match(title="Track 10", artist="Stephen King", album="", confidence=1.0)
+    client = _FakeClient(reply='{"verdict": "consistent"}')
+    HaikuResolver(client=client).witness_identity(_TRACK, _MATCH, second)
+
+    call = client.messages.calls[0]
+    system = call["system"]
+    assert "PRIMARY" in system
+    # A second opinion the video contradicts weighs nothing — it is not evidence
+    # against the primary.
+    assert "never evidence against" in system
+    text = call["messages"][0]["content"][0]["text"]
+    assert "Primary fingerprint identification (the subject of your verdict)" in text
+    assert "Is the PRIMARY fingerprint identification consistent" in text
+
+
+def test_witness_reply_places_the_second_opinion_before_the_verdict():
+    # #88: the reply rules on the second opinion's standing *first*, so the verdict
+    # that follows can't silently drift onto it.
+    client = _FakeClient(reply='{"verdict": "consistent"}')
+    HaikuResolver(client=client).witness_identity(_TRACK, _MATCH)
+
+    system = client.messages.calls[0]["system"]
+    assert system.index('"second_opinion"') < system.index('"verdict"')
+
