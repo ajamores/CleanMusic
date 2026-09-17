@@ -553,6 +553,97 @@ def test_confidence_gate_ignores_stopwords_in_title_agreement():
     assert resolver.witness_calls == []
 
 
+def test_confidence_gate_folds_accents_in_title_agreement():
+    # #91: the tokeniser kept only ASCII, so "Bésame" split into "b" + "same" and
+    # read as a different song from the Source's "Besame" — a correct Match sent to
+    # Review with no witness. Folded, the title agrees and the witness is consulted.
+    match = Match(title="Bésame Mucho", artist="João Gilberto", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/GICw4CoJInA"),
+        _providers(
+            match,
+            FakeTagWriter(),
+            source_title="Besame Mucho",
+            uploader="João Gilberto - Topic",
+            resolver=resolver,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is True
+    assert resolver.witness_calls == [match]
+
+
+def test_confidence_gate_folds_accents_in_artist_corroboration():
+    # #91: "JAŸ-Z" tokenised to {"ja", "z"} and never corroborated "Jay-Z".
+    match = Match(title="Song Cry", artist="JAŸ-Z", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
+    results = run(
+        Source(url="https://youtu.be/songcry"),
+        _providers(match, FakeTagWriter(), source_title="Jay‐Z - Song Cry", resolver=resolver),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is True
+    assert resolver.witness_calls == []  # corroborated fast path
+
+
+def test_confidence_gate_ignores_a_stray_single_letter_in_title_agreement():
+    # #91: Shazam titles the track "untitled 06 l 06.30.2014." — an "l" where the
+    # release has "|". A lone letter carries no identity, so it must not read as a
+    # different song.
+    match = Match(
+        title="untitled 06 l 06.30.2014.", artist="Kendrick Lamar", album="", confidence=1.0
+    )
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
+    results = run(
+        Source(url="https://youtu.be/untitled06"),
+        _providers(
+            match,
+            FakeTagWriter(),
+            source_title="Kendrick Lamar - untitled 06 | 06.30.2014.",
+            resolver=resolver,
+        ),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is True
+    assert resolver.witness_calls == []
+
+
+def test_a_lone_letter_still_distinguishes_artists():
+    # #91 guard: lone letters are dropped only from *titles*. In an artist they are
+    # identity — "Jay Z" is not "Jay Rock" — so the Source title must not corroborate
+    # the Match on the fast path; the witness is consulted instead.
+    match = Match(title="Money Trees", artist="Jay Z", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="unsure")
+    results = run(
+        Source(url="https://youtu.be/moneytrees"),
+        _providers(
+            match, FakeTagWriter(), source_title="Jay Rock - Money Trees", resolver=resolver
+        ),
+    )
+
+    assert results[0].tags is not None and results[0].tags.verified is False
+    assert resolver.witness_calls == [match]
+
+
+def test_a_title_of_only_single_letters_never_agrees():
+    # #91 trade-off: with lone letters ignored, a title made only of them carries no
+    # identity at all — and an empty identity never agrees with anything.
+    match = Match(title="X", artist="Some Artist", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="consistent")
+    results = run(
+        Source(url="https://youtu.be/x"),
+        _providers(match, FakeTagWriter(), source_title="Some Artist - Y", resolver=resolver),
+    )
+
+    result = results[0]
+    assert result.tags is not None and result.tags.verified is False
+    assert resolver.witness_calls == []  # contradicted path: no witness
+
+
 def test_no_match_routes_to_the_review_queue():
     # No fingerprint Match, but the Source names an identity ("Fake Video"), so the
     # Track is now written best-effort (#52) and still routed to Review.
