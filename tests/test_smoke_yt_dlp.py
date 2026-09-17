@@ -129,6 +129,7 @@ def test_smoke_archived_rerun_records_nothing_new(out_dir):
     first = YtDlpDownloader(out_dir=out_dir)
     fresh = first.download(Source(url=_VIDEO_URL))
     assert len(fresh) == 1, "the first fetch should download the Track"
+    first.record_processed(fresh[0])  # as the engine does once it is tagged (#65)
 
     # A fresh Downloader instance, as a second CLI invocation would be; the archive
     # persists in the out dir between runs.
@@ -152,6 +153,8 @@ def test_smoke_playlist_rerun_skips_via_flat_entries(out_dir):
     first = YtDlpDownloader(out_dir=out_dir, expand_playlist=True)
     fresh = first.download(Source(url=_PLAYLIST_URL))
     assert len(fresh) == 2, "the first expansion should fetch both Tracks"
+    for track in fresh:
+        first.record_processed(track)  # as the engine does once each is tagged (#65)
 
     rerun = YtDlpDownloader(out_dir=out_dir, expand_playlist=True)
     again = rerun.download(Source(url=_PLAYLIST_URL))

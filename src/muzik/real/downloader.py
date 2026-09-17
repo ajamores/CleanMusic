@@ -129,17 +129,21 @@ class YtDlpDownloader:
         #: earlier prefix and the download manifest skips it. ``None`` = whole list.
         self._playlist_limit = playlist_limit
         #: The Muzik-owned download manifest (#49): one video id per line, written
-        #: by Muzik itself after each successful fetch. Owning the format (rather
-        #: than piggy-backing yt-dlp's extractor-keyed archive) is what keeps re-run
-        #: detection independent of yt-dlp internals — the coupling behind #28/#29.
+        #: by Muzik itself once a fetched Track is fully processed (#65). Owning the
+        #: format (rather than piggy-backing yt-dlp's extractor-keyed archive) is what
+        #: keeps re-run detection independent of yt-dlp internals (#28/#29).
         self._manifest_path = self._out_dir / ".muzik-manifest.txt"
         #: yt-dlp's old ``<extractor> <id>`` archive, read-only for back-compat
         #: (#49): pre-manifest fetches are recorded here. Muzik no longer lets
         #: yt-dlp write it, so its format is frozen — it only contributes ids.
         self._legacy_archive_path = self._out_dir / ".download-archive.txt"
-        #: The already-fetched ids, lazy-loaded from the manifest (+ legacy archive)
-        #: on first use and kept current in memory as this run records new fetches.
-        self._fetched_ids: set[str] | None = None
+        #: The ids already recorded on disk (manifest + legacy archive), lazy-loaded
+        #: on first use, plus those this run appends — so ``record_processed`` never
+        #: writes a duplicate line (#65).
+        self._recorded_ids: set[str] | None = None
+        #: The ids the filter skips: every recorded id, plus every id this run has
+        #: downloaded but not yet recorded.
+        self._skip_ids: set[str] | None = None
         #: ``(title_or_url, reason)`` for every Source skipped this batch.
         self.skipped: list[tuple[str, str]] = []
         #: Source URLs that yielded no Track because every entry was already in the
@@ -157,6 +161,11 @@ class YtDlpDownloader:
         #: mapping must drop these ids itself or it would emit a Track pointing at
         #: audio that was never fetched.
         self._filter_skipped: set[str] = set()
+        #: Video ids whose file landed during the current ``download`` call. A
+        #: playlist naming a video twice downloads the first copy and filter-skips
+        #: the second; the landed id must survive entry mapping, or that Track is
+        #: never processed, never recorded, and re-fetched every run (#65).
+        self._landed: set[str] = set()
         #: The expanded playlist's own title (#25), set during ``download`` only when
         #: a ``--playlist`` run resolved a Source to a playlist. ``None`` in single
         #: mode — the engine writes no ``.m3u8`` then, there being no list to preserve.
@@ -172,28 +181,42 @@ class YtDlpDownloader:
         is let through — the complete pass decides it.
         """
         video_id = info.get("id")
-        if video_id and video_id in self._fetched():
+        if video_id and video_id in self._skipped_ids():
             self._filter_skipped.add(video_id)
             return f"{video_id} is already in the Muzik download manifest"
         return None
 
-    def _record_fetched(self, filepath: str) -> None:
-        """yt-dlp post hook (#49): record a fetched video id in the manifest.
+    def _note_fetched(self, filepath: str) -> None:
+        """yt-dlp post hook (#49): note a fetched video id for the rest of this run.
 
-        Called with the final filepath after all postprocessing — the same point
-        yt-dlp's own archive recorded at — so only a fully-landed Track is
-        recorded. The stem is the id (outtmpl is ``%(id)s.%(ext)s``). The id also
-        joins the in-memory set, so the filter skips it for the rest of this run.
-
-        A write failure is swallowed: the id stays recorded in memory (no
-        re-download this run) and is simply re-fetched next run. An exception
-        escaping a post hook becomes a yt-dlp error, so bookkeeping raising here
-        would abort the very batch it must never abort (#32).
+        Called with the final filepath after all postprocessing, so only a
+        fully-landed file counts. The stem is the id (outtmpl is ``%(id)s.%(ext)s``).
+        The id joins the in-memory set only — the filter then skips it for the rest
+        of this run, so a video listed twice is fetched once. The manifest on disk is
+        written later, by ``record_processed``, once the engine has finished the
+        Track (#65): a downloaded-but-untagged Track must not be skipped next run.
         """
         video_id = Path(filepath).stem
-        if not video_id or video_id in self._fetched():
+        if video_id:
+            self._skipped_ids().add(video_id)
+            self._landed.add(video_id)
+
+    def record_processed(self, track: Track) -> None:
+        """Record a finished Track in the manifest, so later runs skip it (#65).
+
+        The engine calls this once the Track's outcome — its Tags, or its Review
+        entry — is on disk. Recording here rather than at download is what lets an
+        interrupted batch's re-run pick up the Tracks it never got to: a crash now
+        costs a re-download (recoverable), never a silently untagged orphan.
+
+        A write failure is swallowed: the id is simply re-fetched next run. Manifest
+        bookkeeping must never abort the batch it serves (#32).
+        """
+        video_id = track.audio_path.stem
+        if not video_id or video_id in self._recorded():
             return
-        self._fetched().add(video_id)
+        self._recorded().add(video_id)
+        self._skipped_ids().add(video_id)
         try:
             with self._manifest_path.open("a", encoding="utf-8") as manifest:
                 manifest.write(f"{video_id}\n")
@@ -201,12 +224,19 @@ class YtDlpDownloader:
             logger.warning("could not record %s in the download manifest: %s",
                            video_id, error)
 
-    def _fetched(self) -> set[str]:
-        """The already-fetched ids: loaded from disk once per Downloader, then kept
-        current in memory as this run records fetches."""
-        if self._fetched_ids is None:
-            self._fetched_ids = self._archived_ids()
-        return self._fetched_ids
+    def _recorded(self) -> set[str]:
+        """The ids already on disk plus those this run has appended — what
+        ``record_processed`` must not write again. Read from disk once."""
+        if self._recorded_ids is None:
+            self._recorded_ids = self._archived_ids()
+        return self._recorded_ids
+
+    def _skipped_ids(self) -> set[str]:
+        """The ids the filter skips: every recorded id, plus the ids this run has
+        downloaded and not yet recorded."""
+        if self._skip_ids is None:
+            self._skip_ids = set(self._recorded())
+        return self._skip_ids
 
     def _announce_download(self, status: dict) -> None:
         """yt-dlp progress hook: print each Track's resolved title once, so a fetch
@@ -237,7 +267,7 @@ class YtDlpDownloader:
         plus the same per-entry title the print announcement carries. A callback
         exception is swallowed: a hook that raises becomes a yt-dlp error, so an
         adapter bug here would abort the very download it is only observing —
-        the same contract as the manifest post hook (#32).
+        the same never-abort contract as manifest bookkeeping (#32).
         """
         if self._on_event is None:
             return
@@ -292,8 +322,8 @@ class YtDlpDownloader:
             "noplaylist": not self._expand_playlist,
             # A dead entry (deleted/terminated/private) mid-playlist must not
             # abort the batch (#71): without this the API raises at the entry,
-            # and the whole-Source catch would strand every already-downloaded
-            # Track manifest-recorded but untagged. Confirmed live (2026-08-26):
+            # and the whole-Source catch would discard every already-downloaded
+            # Track before the engine ever tags it. Confirmed live (2026-08-26):
             # with ignoreerrors the dead entry returns as a None entry, its
             # neighbours intact — recorded on ``skipped`` in ``_tracks_from_info``.
             # Single mode keeps the raise, which the catch *classifies* (age wall
@@ -311,9 +341,10 @@ class YtDlpDownloader:
             # ~80s/Track instead of ~4s). Fetched once from yt-dlp's own GitHub
             # distribution, then cached. See docs/LEARNINGS.md (JS runtime entry).
             "remote_components": ["ejs:github"],
-            # Each fully-landed Track's id is recorded in the manifest — after all
-            # postprocessing, the point yt-dlp's own archive recorded at (#49).
-            "post_hooks": [self._record_fetched],
+            # Each fully-landed Track's id is skipped for the rest of this run (#49).
+            # The manifest itself is written only once the engine has processed the
+            # Track (``record_processed``, #65).
+            "post_hooks": [self._note_fetched],
         }
         if self._cookies is not None:
             opts["cookiefile"] = str(self._cookies)
@@ -327,6 +358,7 @@ class YtDlpDownloader:
         self._out_dir.mkdir(parents=True, exist_ok=True)
         self._announced.clear()  # fresh per Source, so each title announces once
         self._filter_skipped.clear()  # skips are per download call, like announcements
+        self._landed.clear()
         try:
             with yt_dlp.YoutubeDL(self._build_opts()) as ydl:
                 if not self._expand_playlist and _is_bare_playlist(ydl, source.url):
@@ -376,7 +408,8 @@ class YtDlpDownloader:
         """Map a yt-dlp result to Tracks. None / all-falsy entries → no Tracks:
         yt-dlp downloaded nothing (a re-run, or an unplayable Source). An entry the
         match_filter skipped this call is dropped too — its info still comes back
-        in full (#49), but no audio was fetched for it."""
+        in full (#49), but no audio was fetched for it — unless another copy of it
+        landed this call (a duplicate playlist entry, #65), which maps once."""
         suffix = self._output_format.file_suffix
         if info is None:
             entries: list = []
@@ -394,11 +427,17 @@ class YtDlpDownloader:
                     ))
         else:
             entries = [info]
-        return [
-            _track_from_entry(entry, self._out_dir, suffix, url_fallback)
-            for entry in entries
-            if entry and entry.get("id") not in self._filter_skipped
-        ]
+        dropped = self._filter_skipped - self._landed
+        tracks: list[Track] = []
+        mapped: set[str] = set()
+        for entry in entries:
+            video_id = entry.get("id") if entry else None
+            if not entry or video_id in dropped or video_id in mapped:
+                continue
+            if video_id is not None:
+                mapped.add(video_id)
+            tracks.append(_track_from_entry(entry, self._out_dir, suffix, url_fallback))
+        return tracks
 
     def _archived_ids(self) -> set[str]:
         """The video ids already fetched: the Muzik manifest (one id per line, #49)

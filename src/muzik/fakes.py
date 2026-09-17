@@ -54,8 +54,8 @@ class FakeDownloader:
         self._entries = list(entries) if entries is not None else [(title, False)]
         #: Stands in for yt-dlp's download archive (#8): a persistent set of the
         #: titles already fetched. When provided, a re-run skips entries in it and
-        #: records freshly fetched ones — so the same set across two ``download``
-        #: calls proves already-fetched Tracks are not re-downloaded.
+        #: the engine's ``record_processed`` adds finished ones (#65) — so the same
+        #: set across two runs proves already-fetched Tracks are not re-downloaded.
         self._archive = download_archive
         #: ``(title, reason)`` for every entry skipped this batch.
         self.skipped: list[tuple[str, str]] = []
@@ -84,9 +84,12 @@ class FakeDownloader:
                     thumbnail_url=self._thumbnail_url,
                 )
             )
-            if self._archive is not None:
-                self._archive.add(title)
         return tracks
+
+    def record_processed(self, track: Track) -> None:
+        # Recorded once processed, not at download (#65) — as the real manifest is.
+        if self._archive is not None:
+            self._archive.add(track.source_title)
 
 
 class FakeFingerprinter:

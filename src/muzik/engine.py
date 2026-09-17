@@ -175,6 +175,14 @@ def run(
     an interrupted batch's re-run re-derives it, unlike a finished Track's
     unrepeatable outcome).
 
+    A Track is marked done in the download manifest only after its outcome is
+    flushed (#65) — the last step per Track, on the same drain thread. So a killed
+    batch leaves every unfinished Track unrecorded, and the re-run fetches and
+    processes it; recording at download used to skip such a Track forever, its file
+    left untagged. A Track that crashed (#62) is not recorded: a crash is not a
+    deliberate outcome — a provider timeout (#79) raises — so a plain re-run retries
+    it, at the cost of a repeat Review entry if it crashes again.
+
     ``on_result`` is the seam a non-CLI adapter streams progress through — the
     sibling adapter ADR-0001 keeps this engine agnostic of. It is invoked on the
     drain thread for each ``(track, result)`` the moment that Track's outcome is
@@ -193,6 +201,8 @@ def run(
         if result.output_path is not None and result.tags is not None:
             entries.append(_playlist_entry(track, result))
             _flush_playlist(playlist_title, entries, providers)
+        if not _crashed(result):
+            providers.downloader.record_processed(track)
         if on_result is not None:
             on_result(track, result)
     for source_url, reason in providers.downloader.skipped:
@@ -257,6 +267,15 @@ def _iter_processed(
         )
 
 
+#: The reason prefix a crashed Track's result carries (#62) — how ``run`` tells a
+#: crash from a deliberate Review routing when deciding what to record (#65).
+_CRASH_REASON_PREFIX = "failed: "
+
+
+def _crashed(result: TrackResult) -> bool:
+    return result.reason is not None and result.reason.startswith(_CRASH_REASON_PREFIX)
+
+
 def _process_track_guarded(track: Track, providers: Providers) -> TrackResult:
     """``_process_track``, with any escaping exception captured as a failed result.
 
@@ -274,7 +293,7 @@ def _process_track_guarded(track: Track, providers: Providers) -> TrackResult:
             tags=None,
             output_path=None,
             status="review",
-            reason=f"failed: {type(exc).__name__}: {exc}",
+            reason=f"{_CRASH_REASON_PREFIX}{type(exc).__name__}: {exc}",
         )
 
 

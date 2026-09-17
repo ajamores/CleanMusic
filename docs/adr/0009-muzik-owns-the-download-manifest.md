@@ -38,3 +38,12 @@ Confirmed by smoke test, not assumed (LEARNINGS: the fake encodes your assumptio
 - The yt-dlp surface Muzik relies on narrows to two documented, stable hooks (`match_filter`, `post_hooks`) — both covered live by `tests/test_smoke_yt_dlp.py` (fresh fetch, `list=`-decorated re-run, playlist re-run via flat entries, legacy-archive re-run).
 - A library downloaded before #49 needs nothing done to it: the frozen legacy read keeps its ids honoured forever.
 - The manifest is append-only and human-readable; deleting a line is the supported way to force a re-fetch of one Track.
+
+## Amendment (#65): a Track is recorded once processed, not once downloaded
+
+"Recording goes through `post_hooks`" is superseded. The post hook recorded a Track the moment its file landed, before identification and tagging, so a batch that died mid-run left its downloaded-but-untagged Tracks in the manifest. The next run skipped them and the files stayed untagged. This bit on the #66 full run: ~137 orphaned Tracks, recovered only by hand-editing the manifest.
+
+- **The engine records, after the outcome is on disk.** `Downloader.record_processed(track)` appends the id once the Track's Review entry and `.m3u8` line are flushed. It is the last step per Track, on the engine's single drain thread (#64). A Track whose processing *crashed* (#62) is not recorded. A crash is not a deliberate outcome (a provider timeout, #79, raises), so a plain re-run retries it; the price is a repeat Review entry if it crashes again.
+- **The post hook still runs, in memory only.** It adds the id to this run's skip set, so a video listed twice in one run is fetched once. The copy that landed still maps to a Track even though its duplicate was filter-skipped, or it would never be processed or recorded. Nothing reaches disk until the Track is processed.
+- **Unchanged:** one id per line, `match_filter` skipping, deleting a line to re-fetch, the frozen legacy archive, and bookkeeping that never raises.
+- **Trade-off, accepted:** a crash between download and processing now costs a re-download on the next run (usually cheap, since yt-dlp finds the file already on disk). The old failure was worse: an orphaned file that nothing flagged.

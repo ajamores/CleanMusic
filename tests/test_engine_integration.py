@@ -25,6 +25,9 @@ class _LocalFileDownloader:
     def download(self, source: Source) -> list[Track]:
         return [Track(source_url=source.url, audio_path=self._audio_path)]
 
+    def record_processed(self, track: Track) -> None:
+        pass
+
 
 def test_engine_writes_a_tagged_m4a_to_disk(silent_m4a, png_1px):
     match = Match(title="Envy", artist="Ogi", album="Monologues", cover_art=png_1px, confidence=1.0)

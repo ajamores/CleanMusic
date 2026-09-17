@@ -59,6 +59,15 @@ class Downloader(Protocol):
         """
         ...
 
+    def record_processed(self, track: Track) -> None:
+        """Mark a downloaded Track done, so a later run skips it (#65).
+
+        The engine calls this once the Track's outcome is on disk — never at
+        download, or an interrupted batch would leave untagged Tracks that no
+        re-run revisits. Must not raise: bookkeeping never aborts a batch (#32).
+        """
+        ...
+
 
 class Fingerprinter(Protocol):
     """Identifies a Track by acoustic fingerprint, or returns None (no match)."""

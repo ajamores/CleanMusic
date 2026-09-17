@@ -28,9 +28,14 @@ class _PlaylistDownloader:
         self._tracks = list(tracks)
         self.skipped: list[tuple[str, str]] = []
         self.playlist_title = playlist_title
+        #: Tracks the engine reported finished, in order (#65) — the manifest's input.
+        self.processed: list[Track] = []
 
     def download(self, source: Source) -> list[Track]:
         return list(self._tracks)
+
+    def record_processed(self, track: Track) -> None:
+        self.processed.append(track)
 
 
 class _TarpitFingerprinter:
@@ -151,3 +156,77 @@ def test_a_completed_batch_still_writes_the_playlist_once_final(tmp_path):
         "#EXTINF:295,Adele - Hello\n"
         "b.m4a\n"
     )
+
+
+# --- the manifest marks a Track done after processing, not at download (#65) ----
+
+
+@pytest.mark.parametrize("concurrency", [1, 3])
+def test_an_interrupted_batch_records_only_the_finished_tracks(tmp_path, concurrency):
+    # The #66 incident: a wedged batch left ~137 downloaded-but-untagged Tracks
+    # already in the manifest, so a re-run skipped them forever. Only a's and b's
+    # outcomes reached disk, so only they may be recorded — c must be fetched again.
+    queue = FakeReviewQueue()
+    downloader = _PlaylistDownloader(_tarpitted_tracks(tmp_path), playlist_title=None)
+
+    with pytest.raises(KeyboardInterrupt):
+        run(
+            Source(url="https://youtube.com/playlist?list=PL"),
+            _providers(downloader, queue),
+            concurrency=concurrency,
+        )
+
+    assert [t.audio_path.stem for t in downloader.processed] == ["a", "b"]
+
+
+def test_a_track_is_recorded_only_once_its_review_entry_is_on_disk(tmp_path):
+    # Recording is the last word on a Track: were it recorded before its Review
+    # entry, a kill between the two would orphan it exactly as before.
+    queue = FakeReviewQueue()
+    recorded_with_queue_size: list[int] = []
+
+    class _Watching(_PlaylistDownloader):
+        def record_processed(self, track: Track) -> None:
+            recorded_with_queue_size.append(len(queue.items()))
+
+    tracks = [_track(tmp_path, "a", "Ogi - Envy", 201), _track(tmp_path, "b", "Adele - Hello", 295)]
+    run(
+        Source(url="https://youtube.com/playlist?list=PL"),
+        _providers(_Watching(tracks, playlist_title=None), queue),
+        concurrency=1,
+    )
+
+    assert recorded_with_queue_size == [1, 2]
+
+
+def test_a_track_whose_processing_crashed_is_left_unrecorded(tmp_path):
+    # A crash is not a deliberate outcome (#65): a provider timeout (#79) raises, and
+    # a tarpitted batch must be retried by a plain re-run, not orphaned again. The
+    # Track's Review entry still lands; only the manifest is left untouched.
+    class _Crashing:
+        def identify(self, track: Track) -> Match:
+            if track.source_title == "Wedged - Song":
+                raise TimeoutError("recognize timed out")
+            return Match(title="Zzz", artist="Nobody", album="", confidence=1.0)
+
+    queue = FakeReviewQueue()
+    downloader = _PlaylistDownloader(
+        [_track(tmp_path, "a", "Ogi - Envy", 201), _track(tmp_path, "c", "Wedged - Song", 180)],
+        None,
+    )
+    providers = Providers(
+        downloader=downloader,
+        fingerprinter=_Crashing(),
+        authority=FakeAuthority(),
+        resolver=FakeResolver(),
+        tagwriter=FakeTagWriter(),
+        review_queue=queue,
+    )
+
+    run(Source(url="https://youtube.com/playlist?list=PL"), providers)
+
+    assert [item.source_url for item in queue.items()] == [
+        "https://youtu.be/a",
+        "https://youtu.be/c",
+    ]
+    assert [t.audio_path.stem for t in downloader.processed] == ["a"]

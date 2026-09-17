@@ -33,6 +33,9 @@ class _PlaylistDownloader:
     def download(self, source: Source) -> list[Track]:
         return list(self._tracks)
 
+    def record_processed(self, track: Track) -> None:
+        pass
+
 
 class _PerTrackFingerprinter:
     """A Match parsed from each Track's own "Artist - Title", so tracks tag distinctly.

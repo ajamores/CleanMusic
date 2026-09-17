@@ -84,20 +84,74 @@ def test_an_incomplete_entry_without_an_id_is_not_skipped(tmp_path):
     assert opts["match_filter"]({"title": "flat"}, incomplete=True) is None
 
 
-def test_a_successful_fetch_is_recorded_in_the_muzik_manifest(tmp_path):
-    # yt-dlp calls the wired post hook with the final filepath after all
-    # postprocessing — the same point its own archive recorded at. The file stem
-    # is the video id (outtmpl is %(id)s.%(ext)s); it lands in the manifest once,
-    # id per line, and the filter skips it from then on — within this same run.
-    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
-    hook = opts["post_hooks"][0]
+def _downloaded(out_dir, video_id: str):
+    """A Track as the Downloader maps a landed ``<id>.m4a``."""
+    return _track_from_entry(
+        {"id": video_id}, out_dir=out_dir, suffix=".m4a", url_fallback="u"
+    )
 
-    hook(str(tmp_path / "abc123.m4a"))
-    hook(str(tmp_path / "abc123.m4a"))  # a re-record must not duplicate the line
+
+def test_a_fetch_is_skipped_for_the_rest_of_the_run_but_not_yet_recorded(tmp_path):
+    # yt-dlp calls the wired post hook with the final filepath after all
+    # postprocessing. The file stem is the video id (outtmpl is %(id)s.%(ext)s):
+    # the filter skips it for the rest of this run, so a playlist naming the same
+    # video twice fetches it once. But a downloaded Track is not yet a finished one
+    # — the manifest stays untouched until the engine has processed it (#65).
+    opts = YtDlpDownloader(out_dir=tmp_path)._build_opts()
+
+    opts["post_hooks"][0](str(tmp_path / "abc123.m4a"))
+
+    assert opts["match_filter"]({"id": "abc123"}, incomplete=False)  # now skipped
+    assert not (tmp_path / ".muzik-manifest.txt").exists()
+
+
+def test_a_processed_track_is_recorded_in_the_muzik_manifest_once(tmp_path):
+    # The engine reports each Track once its outcome is on disk (#65); only then
+    # does its id land in the manifest, id per line, never duplicated.
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    track = _downloaded(tmp_path, "abc123")
+
+    downloader.record_processed(track)
+    downloader.record_processed(track)  # a re-record must not duplicate the line
 
     manifest = (tmp_path / ".muzik-manifest.txt").read_text(encoding="utf-8")
     assert manifest == "abc123\n"
-    assert opts["match_filter"]({"id": "abc123"}, incomplete=False)  # now skipped
+    assert downloader._build_opts()["match_filter"]({"id": "abc123"}, incomplete=False)
+
+
+def test_a_track_downloaded_this_run_is_still_recorded_when_processed(tmp_path):
+    # The in-run skip set learns the id at download; that must not be mistaken for
+    # "already in the manifest" when the engine later records the finished Track.
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+    downloader._build_opts()["post_hooks"][0](str(tmp_path / "abc123.m4a"))
+
+    downloader.record_processed(
+        _downloaded(tmp_path, "abc123")
+    )
+
+    assert (tmp_path / ".muzik-manifest.txt").read_text(encoding="utf-8") == "abc123\n"
+
+
+def test_an_id_already_in_the_manifest_is_not_appended_again(tmp_path):
+    (tmp_path / ".muzik-manifest.txt").write_text("abc123\n", encoding="utf-8")
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+
+    downloader.record_processed(
+        _downloaded(tmp_path, "abc123")
+    )
+
+    assert (tmp_path / ".muzik-manifest.txt").read_text(encoding="utf-8") == "abc123\n"
+
+
+def test_a_manifest_write_failure_never_raises(tmp_path):
+    # Bookkeeping must never abort the batch (#32): a failed append degrades to a
+    # re-fetch next run.
+    (tmp_path / ".muzik-manifest.txt").mkdir()  # a directory where a file is expected
+    downloader = YtDlpDownloader(out_dir=tmp_path)
+
+    downloader.record_processed(
+        _downloaded(tmp_path, "abc123")
+    )
 
 
 def test_cookiefile_added_only_when_cookies_given(tmp_path):
@@ -502,6 +556,37 @@ def test_playlist_mode_expands_a_bare_playlist_without_refusing(tmp_path, monkey
     )
 
     assert [t.audio_path.stem for t in tracks] == ["a", "b"]
+
+
+def test_a_video_listed_twice_in_a_playlist_still_yields_its_track(tmp_path, monkeypatch):
+    # The first copy downloads (the post hook notes its id); the second is then
+    # filter-skipped as a duplicate. Only the skipped copy may be dropped — dropping
+    # the downloaded one too would leave the id never processed, so never recorded,
+    # and re-fetched and orphaned on every run (#65).
+    class _DuplicateEntry(_ScriptedYoutubeDL):
+        def __call__(self, opts: dict):
+            self._post_hook = opts["post_hooks"][0]
+            return super().__call__(opts)
+
+        def extract_info(self, url: str, download: bool = True, process: bool = True):
+            if not download:
+                return self._preflight
+            self._consult_filter({"id": "a"})
+            self._post_hook(str(tmp_path / "a.m4a"))
+            self._consult_filter({"id": "a"})  # the second copy: skipped
+            return self._download_info
+
+    fake = _DuplicateEntry(
+        preflight={"_type": "playlist"},
+        download_info={"_type": "playlist", "entries": [{"id": "a", "title": "A"}, None]},
+    )
+    monkeypatch.setattr("muzik.real.downloader.yt_dlp.YoutubeDL", fake)
+
+    downloader = YtDlpDownloader(out_dir=tmp_path, expand_playlist=True)
+    tracks = downloader.download(Source(url="https://youtube.com/playlist?list=PL"))
+
+    assert [t.audio_path.stem for t in tracks] == ["a"]
+    assert downloader.archive_skips == []
 
 
 # --- a dead playlist entry must not abort the run (ticket #71) ------------------

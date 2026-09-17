@@ -15,7 +15,7 @@ One downloaded audio file — the unit of output, and the thing that gets tagged
 _Avoid_: song, video, file
 
 **Download manifest**:
-The Muzik-owned record of already-fetched video ids — one id per line, in `.muzik-manifest.txt` beside the Tracks — so a re-run Source never re-downloads a Track it already produced (ADR-0009). Deleting a line is how one Track is deliberately re-fetched. yt-dlp's old `<extractor> <id>` archive file is frozen: read for its pre-manifest ids, never written again.
+The Muzik-owned record of finished Tracks' video ids — one id per line, in `.muzik-manifest.txt` beside the Tracks — so a re-run Source never re-downloads a Track it already produced (ADR-0009). An id is recorded once its Track is processed (tagged, or deliberately routed to Review), not when it downloads, so a Track an interrupted batch never finished, or whose processing crashed, is fetched again (#65). Deleting a line is how one Track is deliberately re-fetched. yt-dlp's old `<extractor> <id>` archive file is frozen: read for its pre-manifest ids, never written again.
 _Avoid_: archive (the retired yt-dlp file), history, cache
 
 ### Identification
