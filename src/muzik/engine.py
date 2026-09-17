@@ -688,9 +688,18 @@ def _same_identity(candidate: Match, reference: Match) -> bool:
 
     The gate's own agreement rules — title echoed, artist backed — applied in *both*
     directions: against a Source a subset is agreement, but between two recordings
-    "Love" is not "Love Song" (#87).
+    "Love" is not "Love Song" (#87). A feature credit is moved into the title first,
+    as it is on write (#56): "Mom Praying (feat. Scarface)" by Beanie Sigel and "Mom
+    Praying" by "Beanie Sigel feat. Scarface" are one recording (#93).
     """
+    candidate, reference = _credit_in_title(candidate), _credit_in_title(reference)
     return _echoes(candidate, reference) and _echoes(reference, candidate)
+
+
+def _credit_in_title(match: Match) -> Match:
+    """``match`` with any featured-artist credit moved from its artist into its title."""
+    title, artist = place_feature_credit(match.title, match.artist)
+    return replace(match, title=title, artist=artist)
 
 
 def _echoes(match: Match, other: Match) -> bool:

@@ -246,6 +246,30 @@ def test_both_hit_and_agree_with_the_title_verifies_without_the_witness():
     assert len(acoustid.calls) == 1
 
 
+def test_fingerprints_that_place_a_feature_credit_differently_still_agree():
+    # Observed on the #93 re-check ("Mom Praying", kh7LAdJKly8): Shazam put the credit
+    # in the title, AcoustID in the artist. One recording, so the claims agree — read
+    # as a disagreement, the witness was told AcoustID named something else and sank
+    # the Match 3/10.
+    shazam = Match(title="Mom Praying (feat. Scarface)", artist="Beanie Sigel", album="")
+    acoustid = Match(title="Mom Praying", artist="Beanie Sigel feat. Scarface", album="")
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
+    results = run(
+        Source(url="https://youtu.be/kh7LAdJKly8"),
+        _providers(
+            shazam=shazam,
+            acoustid=FakeFingerprinter(match=acoustid),
+            resolver=resolver,
+            source_title="Mom Praying",
+            uploader="Beanie Sigel - Topic",
+            writer=FakeTagWriter(),
+        ),
+    )
+
+    assert results[0].tags is not None and results[0].tags.verified is True
+    assert resolver.witness_calls == []
+
+
 def test_acoustid_naming_the_same_song_by_another_artist_is_still_witnessed():
     # Agreement means the same *recording*: a cover shares the song name, so the
     # three claims don't agree and the witness still rules.
