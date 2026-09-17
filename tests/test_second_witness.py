@@ -304,6 +304,29 @@ def test_a_tied_acoustid_candidate_that_agrees_with_shazam_is_the_second_opinion
     assert resolver.witness_second_opinions == [_RIGHT]
 
 
+def test_a_tied_candidate_agrees_with_shazam_across_accented_artist_spellings():
+    # #91, the observed "Song Cry" case: Shazam's "JAŸ-Z" never matched AcoustID's
+    # "Jay‐Z", so the tie-break missed the four tied "Song Cry" recordings and the
+    # junk top candidate reached the witness as a credible rival.
+    shazam = Match(title="Song Cry", artist="JAŸ-Z", album="", confidence=1.0)
+    junk = Match(title="What More Can I Say", artist="Jay‐Z", album="", confidence=1.0)
+    right = Match(title="Song Cry", artist="Jay‐Z", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="consistent")
+    run(
+        Source(url="https://youtu.be/songcry"),
+        _providers(
+            shazam=shazam,
+            acoustid=FakeFingerprinter(match=replace(junk, tied=(right,))),
+            resolver=resolver,
+            source_title="Song Cry",
+            uploader="JAY-Z - Topic",
+            writer=FakeTagWriter(),
+        ),
+    )
+
+    assert resolver.witness_second_opinions == [right]
+
+
 def test_a_tie_where_no_candidate_agrees_with_shazam_is_still_a_disagreement():
     shazam = Match(title="You've Changed", artist="Keyshia Cole", album="", confidence=1.0)
     other = Match(title="Other Song", artist="Other Artist", album="", confidence=1.0)

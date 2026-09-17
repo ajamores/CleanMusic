@@ -88,6 +88,7 @@ Tagged Tracks go to `--out`. Beside them sit two files Muzik owns. `.muzik-manif
 | Offline suite | Every external service (yt-dlp, Shazam, AcoustID, MusicBrainz, the Resolver) is replaced by a fake at a clean seam. The tag-writing tests use real files: 1-second clips generated with ffmpeg. CI runs the suite on every push and pull request. | `.venv/bin/pytest` |
 | Live contract tests | Opt-in tests against the real services. A case skips when a key, the network or a tool is missing, so an absent dependency never shows up as a failure. | `.venv/bin/pytest -m smoke` |
 | Benchmarking harness | [`tools/observe.py`](tools/observe.py) runs a real batch and records, for each Track, what the pipeline computes but doesn't print: the fingerprint result, the gate path it took, the source that placed the album, and the identity witness's verdict and how long it took. | `python tools/observe.py "<url>"` |
+| Re-check harness | [`tools/recheck.py`](tools/recheck.py) re-runs a Review queue's Tracks (audio on disk) through today's identification and Confidence gate without writing anything, and prints one row per Track: the old reason, what Shazam and AcoustID heard, the gate path, and the identity witness's verdict and rationale. Shazam isn't fully repeatable, so compare outcomes rather than raw strings. | `python tools/recheck.py downloads/review-queue.jsonl` |
 
 A fake behaves the way its author believes the real service behaves, so it can't catch a wrong belief. Live runs have caught defects that the offline suite passed:
 

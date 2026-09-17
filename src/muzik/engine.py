@@ -12,6 +12,7 @@ touching the others: #3/#4 grow ``_album_waterfall``, #5 fills ``_confidence_gat
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -620,10 +621,31 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", _BRACKETS_RE.sub(" ", text)).strip()
 
 
+def _fold_accents(text: str) -> str:
+    """``text`` with diacritics dropped ("Bésame" → "Besame", "JAŸ-Z" → "JAY-Z").
+
+    The tokeniser keeps only ASCII word characters, so an accented letter would
+    otherwise split a word in two and read as a different song (#91). Comparison
+    only: written Tags keep their diacritics (ADR-0007).
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
 def _identity_tokens(text: str) -> set[str]:
-    """Lower-cased, noise-free word set — the identity a title carries."""
-    words = re.findall(r"[0-9a-z]+", _clean(text).lower())
+    """Lower-cased, noise-free word set — the identity a title or artist carries."""
+    words = re.findall(r"[0-9a-z]+", _clean(_fold_accents(text)).lower())
     return {w for w in words if w not in _NON_IDENTITY_TOKENS}
+
+
+def _title_tokens(text: str) -> set[str]:
+    """``_identity_tokens`` without lone letters, for title agreement (#91).
+
+    In a title a lone letter is noise — Shazam's "untitled 06 l 06.30.2014." has an
+    "l" where the release has "|". A lone digit is kept ("06", "2" tell recordings
+    apart), and artists keep their letters: "Jay Z" is not "Jay Rock".
+    """
+    return {w for w in _identity_tokens(text) if len(w) > 1 or w.isdigit()}
 
 
 def _agrees(match: Match, source_title: str) -> bool:
@@ -632,10 +654,10 @@ def _agrees(match: Match, source_title: str) -> bool:
     Order-independent: every meaningful word of the Match title must appear
     among the Source title's words ("Envy" agrees with "Ogi - Envy").
     """
-    title_tokens = _identity_tokens(match.title)
+    title_tokens = _title_tokens(match.title)
     if not title_tokens:
         return False
-    return title_tokens <= _identity_tokens(source_title)
+    return title_tokens <= _title_tokens(source_title)
 
 
 def _source_artist(source_title: str) -> str:
