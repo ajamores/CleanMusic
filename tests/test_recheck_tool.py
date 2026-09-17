@@ -30,7 +30,7 @@ def test_a_re_checked_entry_reports_the_witness_path_and_its_ruling():
     resolver = FakeResolver(verdict="consistent")
 
     row = recheck.recheck_item(
-        item, track, FakeFingerprinter(shazam), FakeFingerprinter(shazam), resolver
+        item, track, FakeFingerprinter(shazam), FakeFingerprinter(None), resolver
     )
 
     assert row["old_reason"] == item.reason
@@ -39,3 +39,28 @@ def test_a_re_checked_entry_reports_the_witness_path_and_its_ruling():
     assert row["outcome"] == "verified"
     assert row["verdict"] == "consistent"
     assert resolver.resolve_calls == []  # no album guessing on a re-check
+
+
+def test_a_re_checked_entry_where_all_three_claims_agree_reports_the_agreed_path():
+    shazam = Match(title="My 1st Song", artist="JAŸ-Z", album="", confidence=1.0)
+    acoustid = Match(title="My 1st Song", artist="Jay‐Z", album="", confidence=1.0)
+    item = ReviewItem(
+        source_url="https://youtu.be/colv2Wy2q7E",
+        reason="unverified: the identity witness found the Match inconsistent with the Source",
+    )
+    track = Track(
+        source_url=item.source_url,
+        audio_path=Path("/fake/colv2Wy2q7E.m4a"),
+        source_title="My 1st Song",
+        uploader="JAŸ-Z",
+    )
+    resolver = FakeResolver(verdict="inconsistent")
+
+    row = recheck.recheck_item(
+        item, track, FakeFingerprinter(shazam), FakeFingerprinter(acoustid), resolver
+    )
+
+    assert row["path"] == "agreed"
+    assert row["outcome"] == "verified"
+    assert row["verdict"] is None
+    assert resolver.witness_calls == []

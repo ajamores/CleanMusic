@@ -105,14 +105,17 @@ def _identity(match: Match | None) -> dict | None:
 
 
 def _path(seen: _Seen, reason: str | None) -> str:
-    """Which path the Track took: fast (corroborated), witness (uncorroborated),
+    """Which path the Track took: fast (corroborated), agreed (uncorroborated, but
+    Shazam, AcoustID and the title all agree — #93), witness (uncorroborated),
     contradicted, or — with Shazam silent — an AcoustID rescue or a miss. AcoustID is
     null on the fast and contradicted paths: the gate never consults it there (#38)."""
     if seen.ruling is not None:
         return "witness"
     if seen.shazam is None:
         return "rescue" if seen.acoustid is not None else "miss"
-    return "fast" if reason is None else "contradicted"
+    if reason is not None:
+        return "contradicted"
+    return "agreed" if seen.acoustid is not None else "fast"
 
 
 def recheck_item(

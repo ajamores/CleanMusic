@@ -63,3 +63,8 @@ Format:
 - Trigger: a witness/judge prompt hands the model more than one candidate (a primary identification plus a second opinion), and a verdict contradicts its own rationale
 - Failure (2026-09-16, #88): the identity witness's rationale backed Shazam's correct Match, but its verdict scored AcoustID's junk second opinion — `inconsistent`, 2/5 live runs — and the gate, reading only the verdict, sent a good Match to Review. The prompt said "judge which (if either) fits" without ever naming what the verdict was *about*.
 - Rule: name the verdict's subject outright, label the other claims "evidence only", and have the structured reply rule on the secondary claim *before* the verdict. Measure a prompt change with repeated live runs on the failing case **and** an adversarial control that must not flip — here the #16 impersonator: the first fix verified it 1/6, which the benign controls never showed.
+
+## A keyless live run reads as a real verdict
+- Trigger: a scratch script outside the repo root measures the live witness (or any AI tier), and every run comes back the same verdict — typically all `unsure`
+- Failure (2026-09-16, #93): a control script in the scratchpad called `load_dotenv()`, which searches from the *script's* directory, not the cwd — so it found no `.env`, the Resolver ran keyless, and every call degraded to `unsure` by design. Thirty runs looked like a clean, unanimous measurement of old vs new prompts.
+- Rule: from outside the repo, pass the path (`load_dotenv("<repo>/.env")`), and have a measurement script count degraded rulings separately (rationale `witness call failed`) rather than as verdicts. Uniform results across differing cases are a tell, not a finding.

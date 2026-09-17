@@ -576,7 +576,9 @@ def _album_waterfall(track: Track, match: Match, providers: Providers) -> Tags:
 #                    binary (docs/LEARNINGS.md), so there is no bar to lean on;
 #                    instead the Resolver rules on identity over the full evidence
 #                    (fingerprint + title/channel/description/tags/thumbnail,
-#                    ADR-0006). `consistent` -> verified; `inconsistent`/`unsure`
+#                    ADR-0006). When AcoustID names the same recording as Shazam,
+#                    all three claims agree -> verified in code, no AI call (#93).
+#                    Otherwise `consistent` -> verified; `inconsistent`/`unsure`
 #                    -> kept unverified, Review. A witness failure/timeout degrades
 #                    to `unsure` (ADR-0002: the batch never blocks).
 #   * Contradicted — the Source names a different "Artist - Title", or its own
@@ -761,11 +763,13 @@ def _confidence_gate(
     fingerprint (#38). When the title echoes the Match but its own title doesn't
     corroborate the artist, the identity rests on the channel (assertable), on
     nothing, or on a *parse* that may be reversed or dressed — a dumb "Artist -
-    Title" split is not a reliable contradiction signal (#42). There the Resolver is
-    consulted as an independent identity witness (ADR-0006), replacing the retired
-    confidence bar (Shazam confidence is binary — docs/LEARNINGS.md), and — this is
-    where #51 adds cost — the ``second_source`` (AcoustID) is fingerprinted so the
-    witness weighs a second *acoustic* claim, not just the video's metadata. Only a
+    Title" split is not a reliable contradiction signal (#42). There the
+    ``second_source`` (AcoustID) is fingerprinted — this is where #51 adds cost — and
+    when it names the same recording as the Match, the three claims agree and the
+    Match verifies with no AI call (#93). Otherwise the Resolver is consulted as an
+    independent identity witness (ADR-0006), replacing the retired confidence bar
+    (Shazam confidence is binary — docs/LEARNINGS.md), weighing the second acoustic
+    claim alongside the video's metadata. Only a
     Source whose title names a *different* recording is kept provisional without an
     AI call or a second fingerprint — a real contradiction, which also bounds the
     added cost (#38).
@@ -790,6 +794,10 @@ def _confidence_gate(
         second = second_source.identify(track) if second_source is not None else None
         if second is not None:
             second = _break_tie_toward(match, second)
+            # Both fingerprints name the same recording and the title echoes it:
+            # three claims agree, so the witness's sampled verdict may not overrule them (#93).
+            if _same_identity(second, match):
+                return replace(tags, verified=True), None, None
         ruling = _identity_ruling(track, match, second, resolver)
         if ruling.verdict == "consistent":
             return replace(tags, verified=True), None, None

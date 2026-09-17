@@ -2,10 +2,11 @@
 
 AcoustID is a second, independent acoustic source fed to the ADR-0006 identity
 witness — never a blind fallback. These drive the engine with a fake Shazam, a fake
-AcoustID, and a fake Resolver, and assert the behaviours its tickets name (#51, #87):
+AcoustID, and a fake Resolver, and assert the behaviours its tickets name (#51, #87,
+#93):
 
   * Shazam miss + AcoustID hit  — coverage rescue, then witnessed like any identity.
-  * Both hit, agree             — the witness sees both acoustic claims.
+  * Both hit, agree             — with the title agreeing too, verified in code; no witness.
   * Both hit, disagree          — the witness governs; a dissent routes to Review.
   * Both miss                   — Review; nothing is invented.
   * AcoustID top-score tie (#87) — a tied candidate agreeing with Shazam is the
@@ -27,6 +28,7 @@ from muzik.fakes import (
     FakeResolver,
     FakeTagWriter,
 )
+from muzik.real.resolver import HaikuResolver
 
 
 def _providers(shazam, acoustid, resolver, source_title, uploader, writer, authority=None):
@@ -172,7 +174,7 @@ def test_second_opinion_never_triggers_an_album_lookup():
             shazam=shazam,
             acoustid=FakeFingerprinter(match=acoustid_match),
             resolver=FakeResolver(verdict="consistent"),
-            source_title="Trouble Man (Official Audio)",  # uncorroborated → witness runs
+            source_title="Trouble Man (Official Audio)",  # uncorroborated → AcoustID runs
             uploader="Marvin Gaye",
             writer=writer,
             authority=authority,
@@ -215,14 +217,14 @@ def test_both_fingerprinters_miss_routes_to_review():
 # --- Both hit: the witness weighs two acoustic claims -------------------------
 
 
-def test_both_hit_and_agree_witness_receives_both_acoustic_claims():
-    # Shazam is primary; AcoustID is the second opinion. On the uncorroborated path
-    # the witness is handed BOTH acoustic identifications — two sources agreeing is
-    # stronger than the video's own channel.
+def test_both_hit_and_agree_with_the_title_verifies_without_the_witness():
+    # #93: Shazam, AcoustID and the Source title all name the same recording. Three
+    # independent claims agreeing is settled in code — the witness samples its
+    # answer and must not overrule them (observed: "My 1st Song", consistent 3/10).
     shazam = Match(title="Trouble Man", artist="Marvin Gaye", album="Trouble Man", confidence=1.0)
     acoustid_match = Match(title="Trouble Man", artist="Marvin Gaye", album="", confidence=1.0)
     writer = FakeTagWriter()
-    resolver = FakeResolver(verdict="consistent")
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
     acoustid = FakeFingerprinter(match=acoustid_match)
     results = run(
         Source(url="https://youtu.be/agree"),
@@ -238,9 +240,33 @@ def test_both_hit_and_agree_witness_receives_both_acoustic_claims():
 
     result = results[0]
     assert result.tags is not None and result.tags.verified is True
-    assert resolver.witness_calls == [shazam]  # Shazam stays the identity that verifies
-    assert resolver.witness_second_opinions == [acoustid_match]
+    assert result.reason is None
+    assert result.tags.album == "Trouble Man"  # Shazam stays the identity that is tagged
+    assert resolver.witness_calls == []
     assert len(acoustid.calls) == 1
+
+
+def test_acoustid_naming_the_same_song_by_another_artist_is_still_witnessed():
+    # Agreement means the same *recording*: a cover shares the song name, so the
+    # three claims don't agree and the witness still rules.
+    shazam = Match(title="Trouble Man", artist="Marvin Gaye", album="", confidence=1.0)
+    cover = Match(title="Trouble Man", artist="Some Cover Band", album="", confidence=1.0)
+    resolver = FakeResolver(verdict="inconsistent")
+    results = run(
+        Source(url="https://youtu.be/cover"),
+        _providers(
+            shazam=shazam,
+            acoustid=FakeFingerprinter(match=cover),
+            resolver=resolver,
+            source_title="Trouble Man (Official Audio)",
+            uploader="Marvin Gaye",
+            writer=FakeTagWriter(),
+        ),
+    )
+
+    assert results[0].tags is not None and results[0].tags.verified is False
+    assert resolver.witness_calls == [shazam]
+    assert resolver.witness_second_opinions == [cover]
 
 
 def test_both_hit_but_disagree_and_the_witness_dissents_routes_to_review():
@@ -281,11 +307,12 @@ _RIGHT = Match(title="You’ve Changed", artist="Keyshia Cole", album="", confid
 
 def test_a_tied_acoustid_candidate_that_agrees_with_shazam_is_the_second_opinion():
     # The tie is an ambiguity, not a disagreement: one tied recording agrees with
-    # Shazam, so the witness is shown acoustic agreement — not the mislink that
-    # happened to be listed first — and the Track verifies.
+    # Shazam, so that candidate is the second opinion — not the mislink that happened
+    # to be listed first — and with the title agreeing too, the Track verifies without
+    # the witness (#93).
     shazam = Match(title="You've Changed", artist="Keyshia Cole", album="", confidence=1.0)
     writer = FakeTagWriter()
-    resolver = FakeResolver(verdict="consistent")
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
     results = run(
         Source(url="https://youtu.be/32jRn87z3ts"),
         _providers(
@@ -300,19 +327,19 @@ def test_a_tied_acoustid_candidate_that_agrees_with_shazam_is_the_second_opinion
 
     result = results[0]
     assert result.tags is not None and result.tags.verified is True
-    assert resolver.witness_calls == [shazam]
-    assert resolver.witness_second_opinions == [_RIGHT]
+    assert resolver.witness_calls == []
 
 
 def test_a_tied_candidate_agrees_with_shazam_across_accented_artist_spellings():
     # #91, the observed "Song Cry" case: Shazam's "JAŸ-Z" never matched AcoustID's
     # "Jay‐Z", so the tie-break missed the four tied "Song Cry" recordings and the
-    # junk top candidate reached the witness as a credible rival.
+    # junk top candidate reached the witness as a credible rival. Now the tied
+    # "Song Cry" agrees with Shazam and the title, so it verifies with no witness.
     shazam = Match(title="Song Cry", artist="JAŸ-Z", album="", confidence=1.0)
     junk = Match(title="What More Can I Say", artist="Jay‐Z", album="", confidence=1.0)
     right = Match(title="Song Cry", artist="Jay‐Z", album="", confidence=1.0)
-    resolver = FakeResolver(verdict="consistent")
-    run(
+    resolver = FakeResolver(verdict="inconsistent")  # would reject — must not be asked
+    results = run(
         Source(url="https://youtu.be/songcry"),
         _providers(
             shazam=shazam,
@@ -324,7 +351,8 @@ def test_a_tied_candidate_agrees_with_shazam_across_accented_artist_spellings():
         ),
     )
 
-    assert resolver.witness_second_opinions == [right]
+    assert results[0].tags is not None and results[0].tags.verified is True
+    assert resolver.witness_calls == []
 
 
 def test_a_tie_where_no_candidate_agrees_with_shazam_is_still_a_disagreement():
@@ -498,3 +526,55 @@ def test_title_contradiction_never_consults_acoustid():
     assert results[0].reason is not None
     assert resolver.witness_calls == []
     assert acoustid.calls == []
+
+
+# --- Two of three agree: the witness is told (#93) ----------------------------
+
+
+class _Block:
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _PromptRecordingClient:
+    """The Anthropic client surface the witness uses; records each prompt."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+        self.messages = self
+
+    def with_options(self, **kwargs):
+        return self
+
+    def create(self, **kwargs):
+        content = kwargs["messages"][0]["content"]
+        if isinstance(content, list):  # the witness call; the album guess sends a str
+            self.prompts.append(next(b["text"] for b in content if b["type"] == "text"))
+        return type("Resp", (), {"content": [_Block('{"verdict": "consistent"}')]})()
+
+
+def test_two_of_three_agreement_reaches_the_witness_prompt():
+    # Shazam and the title agree on the song; AcoustID names another recording. The
+    # witness still rules, but is told the tally so a sampled false memory doesn't
+    # overrule two agreeing claims.
+    shazam = Match(title="My 1st Song", artist="JAŸ-Z", album="", confidence=1.0)
+    other = Match(title="Encore", artist="Jay‐Z", album="", confidence=1.0)
+    client = _PromptRecordingClient()
+    run(
+        Source(url="https://youtu.be/colv2Wy2q7E"),
+        _providers(
+            shazam=shazam,
+            acoustid=FakeFingerprinter(match=other),
+            resolver=HaikuResolver(client=client),
+            source_title="My 1st Song",
+            uploader="JAŸ-Z",
+            writer=FakeTagWriter(),
+        ),
+    )
+
+    assert len(client.prompts) == 1
+    assert "Two of three identity sources agree" in client.prompts[0]
+    assert "My 1st Song" in client.prompts[0]
+    assert "named a different identification" in client.prompts[0]

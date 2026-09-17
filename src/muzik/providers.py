@@ -117,6 +117,11 @@ class Resolver(Protocol):
         two acoustic sources agreeing is stronger than the video's own title/channel
         (which an impersonator can type), and their disagreement is itself a signal.
         ``None`` when no second source ran (the Shazam-only case).
+
+        The gate consults the witness only when the Source title echoes ``match``'s
+        song and ``second`` does not name the same recording — three agreeing claims
+        verify without it (#93) — so an implementation may take the title's song
+        agreement as given.
         """
         ...
 

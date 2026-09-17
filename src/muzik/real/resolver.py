@@ -184,7 +184,10 @@ def _witness_prompt(track: Track, match: Match, second: Match | None = None) -> 
 
     Carries the primary fingerprint identification and, when a second independent
     acoustic source ran (AcoustID, #51), its identification too — so the witness can
-    weigh two acoustic claims against the video's own evidence.
+    weigh two acoustic claims against the video's own evidence. It also states the
+    tally of identity claims (#93): the gate consults the witness only when the
+    video title echoes the primary's song and the two fingerprints don't agree, so
+    two of three sources back the song, and the witness is told to lean that way.
     """
     tags = ", ".join(track.tags) if track.tags else "(none)"
     description = track.description.strip()
@@ -197,11 +200,27 @@ def _witness_prompt(track: Track, match: Match, second: Match | None = None) -> 
         if second is not None
         else ""
     )
+    other_fingerprinter_outcome = (
+        "found nothing"
+        if second is None
+        else "named a different identification (above)"
+    )
+    tally = (
+        "Two of three identity sources agree: the primary fingerprint identification "
+        f'and the video title both name the song "{match.title}". The third, the '
+        f"other fingerprinter, {other_fingerprinter_outcome}. The title's agreement "
+        "is on the song name only — it does not back the artist. Rule 'consistent' "
+        "unless the evidence names a different recording — a different song, another "
+        "artist's version, a cover, or an impersonator channel. Your own "
+        "memory of an artist's catalogue or album track listings is not evidence: "
+        "do not overrule this agreement on it.\n\n"
+    )
     return (
         "Primary fingerprint identification (the subject of your verdict):\n"
         f"  artist: {match.artist}\n"
         f"  song:   {match.title}\n\n"
         f"{second_block}"
+        f"{tally}"
         "Original video evidence:\n"
         f"  title:       {track.source_title}\n"
         f"  channel:     {track.uploader}\n"

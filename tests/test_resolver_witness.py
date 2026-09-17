@@ -202,3 +202,14 @@ def test_witness_reply_places_the_second_opinion_before_the_verdict():
     system = client.messages.calls[0]["system"]
     assert system.index('"second_opinion"') < system.index('"verdict"')
 
+
+def test_witness_prompt_states_the_two_of_three_tally_when_the_other_fingerprinter_missed():
+    # #93: with no second opinion, the tally names the primary and the title as the
+    # two agreeing claims and says the third found nothing.
+    client = _FakeClient(reply='{"verdict": "consistent"}')
+    HaikuResolver(client=client).witness_identity(_TRACK, _MATCH)
+
+    text = client.messages.calls[0]["messages"][0]["content"][0]["text"]
+    assert "Two of three identity sources agree" in text
+    assert f'name the song "{_MATCH.title}"' in text
+    assert "found nothing" in text
